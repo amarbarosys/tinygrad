@@ -26,8 +26,9 @@ def make_encoder():
   from tinygrad.runtime.autogen.amd.rdna3 import ins as ir3
   from tinygrad.runtime.autogen.amd.rdna4 import ins as ir4
   from tinygrad.runtime.autogen.amd.cdna import ins as irc
-  import math, re
+  import math, re, sys
   from tinygrad.helpers import getenv
+  SQTT_TRACE = getenv("SQTT_TRACE", 0)  # print every scheduled packet, all waves, to stderr
   SIMD_PARITY = getenv("SQTT_SIMD_PARITY", 0)  # which SIMD of the pair gets wave 0: the dispatcher's round robin carries over
 
   def _kinds(*names: str) -> tuple[type[Inst], ...]:
@@ -154,7 +155,9 @@ def make_encoder():
   def schedule() -> list[tuple[int, int, type[PacketType], dict]]:
     """Assign a cycle to every recorded instruction. Returns (cycle, seq, packet class, fields)."""
     out: list[tuple[int, int, type[PacketType], dict]] = []
-    def put(t: int, pkt_cls: type[PacketType], **kw): out.append((t, len(out), pkt_cls, kw))
+    def put(t: int, pkt_cls: type[PacketType], **kw):
+      if SQTT_TRACE: print(f"{t:>7} {pkt_cls.__name__} {kw}", file=sys.stderr)
+      out.append((t, len(out), pkt_cls, kw))
     recs: dict[int, list[list[tuple[Inst|None, bool|None]]]] = {}  # wave -> barrier phases -> records
     pcs: dict[int, list[list[int]]] = {}  # same shape as recs: byte offset of each record in the code
     lanes: dict[int, list[list[tuple[int, int]]]] = {}  # same shape: (exec mask, LDS bank conflict degree)
@@ -205,6 +208,7 @@ def make_encoder():
         idle_tie = t > unit["lds"] and len({simd[r[1]] for r in cand}) > 1  # both ports became ready while the server sat idle
         r = next((r for r in cand if simd[r[1]] == (2 if idle_tie else 0)), cand[0])
         lds_q.remove(r)
+        if SQTT_TRACE: print(f"{t:>7} LDS_SERVICE wave {r[1]} simd {simd[r[1]]} {'store' if r[2] else 'load'} issued {r[0] - LDS_ACCEPT}", file=sys.stderr)
         lds_starts[simd[r[1]]].append(t)
         st[r[1]]["last_lds_service"] = t
         unit["lds"] = t + r[3]
@@ -223,7 +227,7 @@ def make_encoder():
       reads = _regs(inst, ("src0", "src1", "src2", "vsrc1", "addr", "data0", "data1", "data", "saddr", "ssrc0", "ssrc1",
                          "srcx0", "vsrcx1", "srcy0", "vsrcy1"))
       writes = _regs(inst, ("vdst", "sdst", "vdstx", "vdsty"))
-      need = max(cycle, line_ready(pcs[w][ph][s["i"]] // 64, cycle))
+      need = max(cycle, line_ready((pcs[w][ph][s["i"]] + inst.size() - 1) // 64, cycle))  # the whole instruction must be fetched
       if cls == "VALU" and len(busy_wmma := [d for d in s["wmma_done"] if d - 1 > cycle]) >= WMMA_INFLIGHT:
         need = max(need, min(busy_wmma) - 1)
       if cls == "VALU" and len(s["valu_execs"]) >= VALU_QUEUE:  # the per-wave VALU queue holds 13; a slot frees at exec + 4
