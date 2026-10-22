@@ -7,6 +7,7 @@ from tinygrad.renderer.amd.sqtt import (_build_decode_tables, PACKET_TYPES_RDNA3
                                         LAYOUT_HEADER, WAVESTART, WAVEEND, INST, IMMEDIATE, IMMEDIATE_MASK, VALUINST, TS_DELTA_OR_MARK)
 
 _NIB_COUNTS = {cls: nc for _, (cls, nc, *_) in _build_decode_tables(PACKET_TYPES_RDNA3)[0].items()}
+LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 7, 8
 
 def _emit_nibbles(nibbles: list[int], pkt_cls: type[PacketType], **kwargs):
   raw = pkt_cls.encoding.default
@@ -167,7 +168,7 @@ def make_encoder():
     st: dict[int, dict[str, Any]] = {w: dict(i=0, ready=rank[w] + FETCH_LAT, blocked=False, valu_exec=None, salu_issue=None, salu_exec=None,
                   mem_issue=None, reg_ready={},
                   lgkm=[], vm=[], vs=[], arrival=None, lds_wait=0, valu_execs=[], valu_issues=[],
-                  early_valu=False, last_mem=None, lds_dst=set(), valu_sread={},
+                  early_valu=False, last_mem=None, last_lds_store=False, lds_dst=set(), valu_sread={},
                   wmma_done=[], wmma_ready={}, vsgpr_exec={}, pend=[], last_issue=0, salu_gate=False,
                   last_cls=None) for w in waves}
     valu_free, trans_free, unit = {0: 0, 2: 0}, {0: 0, 2: 0}, dict(lds=0)
@@ -236,6 +237,10 @@ def make_encoder():
           need = max(need, s["valu_issues"][-n] + VALU_DEP_LAT)
         elif 9 <= dep <= 11 and s["salu_issue"] is not None: need = max(need, s["salu_issue"] + 1 + dep - 8)
       if cls == "IMM" and s["last_cls"] in ("SALU", "VALU"): need = max(need, s["last_issue"] + IMM_AFTER_ALU)
+      if cls == "VALU" and s["last_cls"] == "LDS":
+        # The LDS pipe holds the next VALU issue even when no waitcnt is present.
+        # gfx1100 traces show +7 after a load and +8 after a b32 store.
+        need = max(need, s["last_issue"] + (LDS_TO_VALU_STORE if s["last_lds_store"] else LDS_TO_VALU_LOAD))
       if cls == "VALU" and s["salu_gate"]: need = max(need, s["salu_exec"] + VALU_AFTER_SALU)  # SALU wrote EXEC, or an s_nop followed it
       if cls == "IMM":
         if s["mem_issue"] is not None: need = max(need, s["mem_issue"] + IMM_AFTER_MEM)
@@ -257,6 +262,7 @@ def make_encoder():
       s["ready"] = cycle + 1
       s["pend"] = [[c - 1, d] for c, d in s["pend"] if c > 0]
       s["last_cls"], s["last_issue"] = cls, cycle
+      if cls == "LDS": s["last_lds_store"] = "STORE" in _name(inst)
       if cls == "SALU": s["salu_gate"] = "EXEC" in repr(getattr(inst, "sdst", ""))
       elif _name(inst) == "S_NOP" and s["salu_exec"] is not None: s["salu_gate"] = True
       elif cls == "VALU": s["salu_gate"] = False
