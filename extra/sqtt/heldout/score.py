@@ -42,8 +42,7 @@ def waves(blob:bytes) -> dict[tuple[int, bool], list[tuple[str, int]]]:
 def primary(blobs) -> dict:
   return next(({w: s for w, s in ws.items() if not w[1]} for b in blobs if (ws := waves(b))), {})
 
-def score(pkl:Path, local:int=128) -> tuple[int, int, int]:
-  """(exact deltas, scored deltas, total abs error) for one capture; tries both SIMD parities."""
+def _replay(pkl:Path, local:int=128):
   data = pickle.load(open(pkl, "rb"))
   real = primary(e.blob for e in data if type(e).__name__ == "ProfileSQTTEvent")
   lib = next(e for e in data if type(e).__name__ == "ProfileProgramEvent" and e.lib).lib
@@ -59,13 +58,34 @@ def score(pkl:Path, local:int=128) -> tuple[int, int, int]:
     with Context(PROFILE=1, ASM_CALL=0):
       run_asm(ctypes.addressof(cbuf), len(code), 1, 1, 1, local, 1, 1, ctypes.addressof(args))
     emu = primary(list(sqtt_traces))
-    hit = n = err = 0
+    n = 0
     for rw, ew in zip(sorted(real), sorted(emu)):
       rs, es = real[rw], emu[ew]
       if [k for k, _ in rs] != [k for k, _ in es]: continue
-      for (_, rd), (_, ed) in zip(rs, es): n += 1; hit += rd == ed; err += abs(rd - ed)
-    if n: return hit, n, err
-  return 0, 0, 0
+      n += len(rs)
+    if n: return real, emu
+  return real, {}
+
+def score(pkl:Path, local:int=128) -> tuple[int, int, int]:
+  """(exact deltas, scored deltas, total abs error) for one capture; tries both SIMD parities."""
+  real, emu = _replay(pkl, local)
+  hit = n = err = 0
+  for rw, ew in zip(sorted(real), sorted(emu)):
+    rs, es = real[rw], emu[ew]
+    if [k for k, _ in rs] != [k for k, _ in es]: continue
+    for (_, rd), (_, ed) in zip(rs, es): n += 1; hit += rd == ed; err += abs(rd - ed)
+  return hit, n, err
+
+def score_detail(pkl:Path, local:int=128) -> dict[str, tuple[int, int, int]]:
+  """Return per-packet-kind (exact, scored, absolute error) for one capture."""
+  real, emu = _replay(pkl, local)
+  out = defaultdict(lambda: [0, 0, 0])
+  for rw, ew in zip(sorted(real), sorted(emu)):
+    rs, es = real[rw], emu[ew]
+    if [k for k, _ in rs] != [k for k, _ in es]: continue
+    for (rk, rd), (_, ed) in zip(rs, es):
+      out[rk][0] += rd == ed; out[rk][1] += 1; out[rk][2] += abs(rd - ed)
+  return {k: tuple(v) for k, v in out.items()}
 
 if __name__ == "__main__":
   pkls = [Path(p) for p in sys.argv[1:]] or sorted(CAPTURES.glob("seed*.pkl"), key=lambda p: int(p.stem[4:]))
