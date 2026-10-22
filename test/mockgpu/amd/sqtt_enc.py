@@ -13,7 +13,8 @@ VALUB_EXEC_EXTRA, VALUB_OCC, SALU_AFTER_VALUB = 3, 1, 5
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 # barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
 BARRIER_WINDOW, BARRIER_BUSY = 2, 7
-LDS_NEWEST, LDS_TIE_ALTERNATE = 1, 1  # LDS arbitration between SIMDs: newest-accepted head wins; equal: idle -> alternate, busy -> stay
+LDS_NEWEST, LDS_TIE_ALTERNATE = 1, 1
+SHARED_ISSUE = ("IMM", "BARRIER")  # classes two waves of a SIMD issue in one cycle (waits of several waves make one IMMEDIATE_MASK)  # LDS arbitration between SIMDs: newest-accepted head wins; equal: idle -> alternate, busy -> stay
 BARRIER_SERIAL = 1  # the barrier unit counts one arrival per cycle per workgroup; the release follows the last one counted
 
 def _emit_nibbles(nibbles: list[int], pkt_cls: type[PacketType], **kwargs):
@@ -179,7 +180,7 @@ def make_encoder():
     st: dict[int, dict[str, Any]] = {w: dict(i=0, ready=rank[w] + FETCH_LAT, blocked=False, valu_exec=None, salu_issue=None, salu_exec=None,
                   mem_issue=None, reg_ready={},
                   lgkm=[], vm=[], vs=[], arrival=None, lds_wait=0, valu_execs=[], valu_issues=[],
-                  early_valu=False, last_mem=None, last_lds_store=False, last_lds_service=None, lds_dst=set(), valu_sread={},
+                  early_valu=False, last_mem=None, last_lds_store=False, last_lds_service=None, lds_hold=False, lds_dst=set(), valu_sread={},
 
                   wmma_done=[], wmma_ready={}, vsgpr_exec={}, pend=[], last_issue=0, salu_gate=False,
                   last_cls=None, last_valub=False) for w in waves}
@@ -260,9 +261,7 @@ def make_encoder():
       if cls == "IMM" and s["last_cls"] in ("SALU", "VALU"): need = max(need, s["last_issue"] + IMM_AFTER_ALU)
       bkey = (w // 64, simd[w])
       if cls == "BARRIER" and (a := bar_open.get(bkey)) is not None and BARRIER_WINDOW <= need - a < BARRIER_BUSY: need = a + BARRIER_BUSY
-      if cls == "VALU" and s["last_cls"] == "LDS":
-        # The LDS pipe holds the next VALU issue even when no waitcnt is present.
-        # gfx1100 traces show service-start +4 after a load and +5 after a b32 store.
+      if cls == "VALU" and s["lds_hold"]:  # the LDS pipe holds the next VALU: service start +4 after a load, +5 after a b32 store
         if s["last_lds_service"] is None: need = max(need, cycle + 1)
         else: need = max(need, s["last_lds_service"] + (LDS_TO_VALU_STORE if s["last_lds_store"] else LDS_TO_VALU_LOAD))
       if cls == "VALU" and s["salu_gate"]: need = max(need, s["salu_exec"] + VALU_AFTER_SALU)  # SALU wrote EXEC, or an s_nop followed it
@@ -286,9 +285,9 @@ def make_encoder():
       s["ready"] = cycle + 1
       s["pend"] = [[c - 1, d] for c, d in s["pend"] if c > 0]
       s["last_cls"], s["last_issue"] = cls, cycle
-      if cls == "LDS": s["last_lds_store"], s["last_lds_service"] = "STORE" in _name(inst), None
+      if cls == "LDS": s["last_lds_store"], s["last_lds_service"], s["lds_hold"] = "STORE" in _name(inst), None, True
+      elif cls == "VALU": s["lds_hold"] = False
       if cls == "SALU": s["salu_gate"] = "EXEC" in repr(getattr(inst, "sdst", ""))
-      elif _name(inst) == "S_NOP" and s["salu_exec"] is not None: s["salu_gate"] = True
       elif cls == "VALU": s["salu_gate"] = False
       if cls == "IMM":
         if _name(inst) == "S_SET_INST_PREFETCH_DISTANCE": icache["ahead"] = getattr(inst, "simm16") & 3
@@ -400,7 +399,7 @@ def make_encoder():
             cls, op = _classify(inst, bt)
             port = _port(op) if cls == "VALU" else cls
             if cycle >= s["ready"] and cycle >= port_free.get((simd[w], port), 0) and (simd[w], cls) not in busy \
-                 and issue(w, cls, op, inst, cycle): busy.add((simd[w], cls))
+                 and issue(w, cls, op, inst, cycle) and cls not in SHARED_ISSUE: busy.add((simd[w], cls))
           if s["i"] >= len(recs[w][ph]): live.remove(w)
         cycle = max(cycle + 1, min((st[w]["ready"] for w in live), default=cycle + 1))
     return out
