@@ -8,8 +8,9 @@ from tinygrad.renderer.amd.sqtt import (_build_decode_tables, PACKET_TYPES_RDNA3
 
 _NIB_COUNTS = {cls: nc for _, (cls, nc, *_) in _build_decode_tables(PACKET_TYPES_RDNA3)[0].items()}
 LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
-# VALUB_4 (32-bit integer multiply): exec 3 later than a plain VALU, holds the pipe VALUB_OCC, the next SALU issues at +5
-VALUB_EXEC_EXTRA, VALUB_OCC, SALU_AFTER_VALUB = 3, 4, 5
+# VALUB_4 (32-bit integer multiply): starts like a plain VALU, holds the pipe VALUB_OCC, its exec token is the last of them;
+# the next SALU issues at +5
+VALUB_OCC, SALU_AFTER_VALUB = 4, 5
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 # barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
 BARRIER_WINDOW, BARRIER_BUSY = 2, 7
@@ -310,7 +311,7 @@ def make_encoder():
         if s["early_valu"] and not reads & s["lds_dst"]: lat = min(lat, VALU_AFTER_LDS_WAIT)
         s["early_valu"] = False
         valub = op is not None and op.name.startswith("VALUB_")
-        base = cycle + lat + (VALUB_EXEC_EXTRA if valub else 0)
+        base = cycle + lat
         wmma = _name(inst).startswith("V_WMMA")
         ready, trans = s["wmma_ready"] if wmma else s["reg_ready"], _port(op) == "TRANS"
         ex = max([base, valu_free[simd[w]], trans_free[simd[w]] if trans else 0] + [ready.get(r, 0) for r in reads])
@@ -318,7 +319,8 @@ def make_encoder():
         # accumulating in place: the forwarded register is also the destination and another source shares its VGPR bank
         if ex == base and any(s["reg_ready"].get(d) == ex and any(o != d and o[0] == "v" and int(o[1:]) % 4 == int(d[1:]) % 4
                                                                   for o in reads) for d in writes & reads if d[0] == "v"): ex += 1
-        valu_free[simd[w]], s["valu_exec"] = ex + (VALUB_OCC if valub else 1), ex
+        if valub: ex += VALUB_OCC - 1
+        valu_free[simd[w]], s["valu_exec"] = ex + 1, ex
         s["last_valub"] = valub
         if wmma:  # holds the pipe WMMA_LAT cycles; its exec token marks completion
           ex += WMMA_LAT

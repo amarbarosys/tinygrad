@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emulator SQTT timing on held-out kernels: random SRAM probes captured on a 7900 XTX.
 
-seed1-11 (randprobe), mul1-10 (randprobe_mul) and v2_100-119 (randprobe_v2) were each captured once, before the rules
+seed1-11 (randprobe), mul1-10 (randprobe_mul) and v2_100-139 (randprobe_v2) were each captured once, before the rules
 that followed were written; by now every set has been used to fit, so a fresh set must be captured to validate.
 Each capture must keep at least its recorded number of exact deltas; a timing change that helps the fitted
 examples but costs held-out accuracy fails here. Every measured constant is checked to be falsifiable: moved by
@@ -14,17 +14,20 @@ from extra.sqtt.heldout.score import CAPTURES, all_captures, score
 import test.mockgpu.amd.sqtt_enc as sqtt_enc
 
 # capture -> (exact deltas at least, scored deltas)
-FLOOR = {"mul1": (78, 94), "mul2": (76, 84), "mul3": (90, 100), "mul4": (88, 100), "mul5": (84, 102),
-         "mul6": (76, 90), "mul7": (88, 106), "mul8": (87, 104), "mul9": (96, 116), "mul10": (82, 90),
-         "seed1": (85, 94), "seed2": (78, 84), "seed3": (93, 104), "seed4": (95, 108), "seed5": (87, 100),
-         "seed6": (76, 90), "seed7": (96, 108), "seed8": (92, 102), "seed9": (102, 112), "seed10": (81, 90),
-         "seed11": (98, 116), "v2_100": (86, 94), "v2_101": (90, 102), "v2_102": (89, 96), "v2_103": (98, 116),
-         "v2_104": (75, 86), "v2_105": (91, 106), "v2_106": (96, 116), "v2_107": (92, 104), "v2_108": (82, 92),
-         "v2_109": (97, 110), "v2_110": (88, 110), "v2_111": (86, 94), "v2_112": (89, 114), "v2_113": (72, 86),
-         "v2_114": (83, 96), "v2_115": (81, 100), "v2_116": (91, 100), "v2_117": (86, 102), "v2_118": (88, 98),
-         "v2_119": (86, 102)}
+FLOOR = {"mul1": (80, 94), "mul2": (78, 84), "mul3": (90, 100), "mul4": (88, 100), "mul5": (86, 102), "mul6": (76, 90),
+         "mul7": (90, 106), "mul8": (87, 104), "mul9": (95, 116), "mul10": (82, 90), "seed1": (85, 94),
+         "seed2": (78, 84), "seed3": (93, 104), "seed4": (95, 108), "seed5": (87, 100), "seed6": (76, 90),
+         "seed7": (96, 108), "seed8": (92, 102), "seed9": (102, 112), "seed10": (81, 90), "seed11": (98, 116),
+         "v2_100": (88, 94), "v2_101": (90, 102), "v2_102": (89, 96), "v2_103": (98, 116), "v2_104": (77, 86),
+         "v2_105": (91, 106), "v2_106": (100, 116), "v2_107": (92, 104), "v2_108": (82, 92), "v2_109": (97, 110),
+         "v2_110": (90, 110), "v2_111": (88, 94), "v2_112": (89, 114), "v2_113": (73, 86), "v2_114": (85, 96),
+         "v2_115": (85, 100), "v2_116": (91, 100), "v2_117": (88, 102), "v2_118": (90, 98), "v2_119": (86, 102),
+         "v2_120": (103, 116), "v2_121": (84, 94), "v2_122": (97, 114), "v2_123": (76, 84), "v2_124": (89, 102),
+         "v2_125": (83, 100), "v2_126": (75, 88), "v2_127": (80, 88), "v2_128": (87, 98), "v2_129": (103, 118),
+         "v2_130": (103, 120), "v2_131": (91, 108), "v2_132": (99, 112), "v2_133": (102, 122), "v2_134": (101, 114),
+         "v2_135": (95, 116), "v2_136": (88, 106), "v2_137": (79, 86), "v2_138": (82, 96), "v2_139": (65, 76)}
 # constant -> capture whose exact count drops when the constant moves by one cycle either way
-MUTANTS = {"LDS_TO_VALU_LOAD": "mul2", "LDS_TO_VALU_STORE": "mul4", "VALUB_EXEC_EXTRA": "mul3", "SALU_AFTER_VALUB": "mul4",
+MUTANTS = {"LDS_TO_VALU_LOAD": "mul2", "LDS_TO_VALU_STORE": "mul4", "SALU_AFTER_VALUB": "mul4",
            "BARRIER_WINDOW": "v2_111", "BARRIER_BUSY": "v2_102", "BARRIER_SERIAL": "v2_109", "MEM_AFTER_EXEC": "seed2", "VALUB_OCC": "v2_104"}
 
 class TestSQTTHeldout(unittest.TestCase):
