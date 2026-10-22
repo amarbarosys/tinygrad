@@ -26,7 +26,7 @@ class TestSQTTHeldout(unittest.TestCase):
     """The measured +7/+8 LDS successor hazards must be falsifiable."""
     base = (sqtt_enc.LDS_TO_VALU_LOAD, sqtt_enc.LDS_TO_VALU_STORE)
     try:
-      for name, seed in (("LDS_TO_VALU_LOAD", 1), ("LDS_TO_VALU_STORE", 3)):
+      for name, seed in (("LDS_TO_VALU_LOAD", 1), ("LDS_TO_VALU_STORE", 4)):
         want = score(CAPTURES / f"seed{seed}.pkl")[0]
         for delta in (-1, 1):
           with self.subTest(name=name, delta=delta):
