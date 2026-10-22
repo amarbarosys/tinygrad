@@ -75,7 +75,7 @@ def _replay(pkl:Path, local:int=128):
 
 def all_captures() -> list[Path]:
   """Every capture: seed1-11 (randprobe), mul1-10 (randprobe_mul), v2_100-119 (randprobe_v2), in that order."""
-  key = lambda p: (p.stem.split("_")[0].rstrip("0123456789"), int(p.stem.split("_")[-1].lstrip("seedmul")))
+  def key(p:Path) -> tuple[str, int]: return p.stem.split("_")[0].rstrip("0123456789"), int(p.stem.split("_")[-1].lstrip("seedmul"))
   return sorted(CAPTURES.glob("*.pkl"), key=key)
 
 DRAM_STALL = 200  # no SRAM latency reaches this; a longer delta is a DRAM access or an instruction fetch from memory
@@ -101,13 +101,13 @@ def score(pkl:Path, local:int=128, sram:bool=False) -> tuple[int, int, int]:
 def score_detail(pkl:Path, local:int=128) -> dict[str, tuple[int, int, int]]:
   """Return per-packet-kind (exact, scored, absolute error) for one capture."""
   real, emu = _replay(pkl, local)
-  out = defaultdict(lambda: [0, 0, 0])
+  out:defaultdict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
   for rw, ew in zip(sorted(real), sorted(emu)):
     rs, es = real[rw], emu[ew]
     if [k for k, _ in rs] != [k for k, _ in es]: continue
     for (rk, rd), (_, ed) in zip(rs, es):
       out[rk][0] += rd == ed; out[rk][1] += 1; out[rk][2] += abs(rd - ed)
-  return {k: tuple(v) for k, v in out.items()}
+  return {k: (v[0], v[1], v[2]) for k, v in out.items()}
 
 if __name__ == "__main__":
   sram = "--sram" in sys.argv

@@ -3,7 +3,7 @@
 
 Run with: python3 extra/sqtt/heldout/misses.py [--only KIND] [--miss] PKL ...   (default: every fit capture)
 """
-import argparse, pickle, sys
+import argparse, pickle
 from pathlib import Path
 from tinygrad.renderer.amd import decode_inst
 from tinygrad.runtime.support.elf import elf_loader
@@ -17,7 +17,7 @@ def insts(pkl:Path) -> list:
   code, out, pc = bytes(image[text.header.sh_addr:text.header.sh_addr + text.header.sh_size]), [], 0
   while pc < len(code):
     i = decode_inst(code[pc:pc + 16]); out.append((pc, i)); pc += i.size()
-    if i.__class__.__name__ == "SOPP" and i.op.name == "S_ENDPGM": break
+    if i.__class__.__name__ == "SOPP" and getattr(i, "op").name == "S_ENDPGM": break
   return out
 
 def table(pkl:Path, only:str|None=None, miss_only:bool=False, local:int=128):

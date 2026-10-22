@@ -214,11 +214,13 @@ def make_encoder():
         last = unit.get("lds_simd")
         if len(heads) == 1: pick = next(iter(heads))
         elif heads[0][0] != heads[2][0]: pick = max(heads, key=lambda sm: heads[sm][0]) if LDS_NEWEST else min(heads, key=lambda sm: heads[sm][0])
-        else: pick = LDS_FIRST if last is None else (2 - last if t > unit["lds"] else last) if LDS_TIE_ALTERNATE else last if last is not None else LDS_FIRST
+        elif last is None: pick = LDS_FIRST
+        else: pick = 2 - last if LDS_TIE_ALTERNATE and t > unit["lds"] else last
         r = heads[pick]
         unit["lds_simd"] = simd[r[1]]
         lds_q.remove(r)
-        if SQTT_TRACE: print(f"{t:>7} LDS_SERVICE wave {r[1]} simd {simd[r[1]]} {'store' if r[2] else 'load'} issued {r[0] - LDS_ACCEPT}", file=sys.stderr)
+        if SQTT_TRACE:
+          print(f"{t:>7} LDS_SERVICE wave {r[1]} simd {simd[r[1]]} {'store' if r[2] else 'load'} issued {r[0] - LDS_ACCEPT}", file=sys.stderr)
         lds_starts[simd[r[1]]].append(t)
         st[r[1]]["last_lds_service"] = t
         unit["lds"] = t + r[3]
