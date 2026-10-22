@@ -20,8 +20,8 @@ def insts(pkl:Path) -> list:
     if i.__class__.__name__ == "SOPP" and i.op.name == "S_ENDPGM": break
   return out
 
-def table(pkl:Path, only:str|None=None, miss_only:bool=False):
-  real, emu = _replay(pkl)
+def table(pkl:Path, only:str|None=None, miss_only:bool=False, local:int=128):
+  real, emu = _replay(pkl, local)
   code = [(pc, i) for pc, i in insts(pkl) if not (hasattr(i, "op") and i.op.name in ("S_DELAY_ALU", "S_ENDPGM"))]
   for rw, ew in zip(sorted(real), sorted(emu)):
     rs, es = real[rw], emu[ew]
@@ -37,5 +37,6 @@ def table(pkl:Path, only:str|None=None, miss_only:bool=False):
 if __name__ == "__main__":
   ap = argparse.ArgumentParser()
   ap.add_argument("pkls", nargs="*"); ap.add_argument("--only"); ap.add_argument("--miss", action="store_true")
+  ap.add_argument("--local", type=int, default=128, help="workgroup size the capture was launched with")
   a = ap.parse_args()
-  for p in [Path(p) for p in a.pkls] or sorted(CAPTURES.glob("seed*.pkl"), key=lambda p: int(p.stem[4:])): table(p, a.only, a.miss)
+  for p in [Path(p) for p in a.pkls] or sorted(CAPTURES.glob("seed*.pkl"), key=lambda p: int(p.stem[4:])): table(p, a.only, a.miss, a.local)

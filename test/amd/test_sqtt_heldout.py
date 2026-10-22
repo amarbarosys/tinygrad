@@ -14,18 +14,18 @@ from extra.sqtt.heldout.score import CAPTURES, all_captures, score
 import test.mockgpu.amd.sqtt_enc as sqtt_enc
 
 # capture -> (exact deltas at least, scored deltas)
-FLOOR = {"mul1": (68, 94), "mul2": (71, 84), "mul3": (84, 100), "mul4": (90, 100), "mul5": (77, 102),
-         "mul6": (73, 90), "mul7": (79, 106), "mul8": (75, 104), "mul9": (83, 116), "mul10": (73, 90),
-         "seed1": (80, 94), "seed2": (68, 84), "seed3": (79, 104), "seed4": (84, 108), "seed5": (86, 100),
-         "seed6": (73, 90), "seed7": (89, 108), "seed8": (81, 102), "seed9": (86, 112), "seed10": (73, 90),
-         "seed11": (89, 116), "v2_100": (78, 94), "v2_101": (73, 102), "v2_102": (76, 96), "v2_103": (88, 116),
-         "v2_104": (65, 86), "v2_105": (80, 106), "v2_106": (86, 116), "v2_107": (73, 104), "v2_108": (78, 92),
-         "v2_109": (90, 110), "v2_110": (88, 110), "v2_111": (77, 94), "v2_112": (89, 114), "v2_113": (63, 86),
-         "v2_114": (75, 96), "v2_115": (77, 100), "v2_116": (85, 100), "v2_117": (76, 102), "v2_118": (79, 98),
-         "v2_119": (72, 102)}
+FLOOR = {"mul1": (76, 94), "mul2": (78, 84), "mul3": (90, 100), "mul4": (88, 100), "mul5": (84, 102),
+         "mul6": (77, 90), "mul7": (86, 106), "mul8": (87, 104), "mul9": (96, 116), "mul10": (80, 90),
+         "seed1": (85, 94), "seed2": (78, 84), "seed3": (89, 104), "seed4": (93, 108), "seed5": (87, 100),
+         "seed6": (76, 90), "seed7": (94, 108), "seed8": (92, 102), "seed9": (102, 112), "seed10": (79, 90),
+         "seed11": (96, 116), "v2_100": (85, 94), "v2_101": (86, 102), "v2_102": (89, 96), "v2_103": (96, 116),
+         "v2_104": (73, 86), "v2_105": (89, 106), "v2_106": (95, 116), "v2_107": (92, 104), "v2_108": (78, 92),
+         "v2_109": (95, 110), "v2_110": (89, 110), "v2_111": (86, 94), "v2_112": (87, 114), "v2_113": (72, 86),
+         "v2_114": (85, 96), "v2_115": (77, 100), "v2_116": (91, 100), "v2_117": (86, 102), "v2_118": (85, 98),
+         "v2_119": (86, 102)}
 # constant -> capture whose exact count drops when the constant moves by one cycle either way
 MUTANTS = {"LDS_TO_VALU_LOAD": "mul2", "LDS_TO_VALU_STORE": "mul4", "VALUB_EXEC_EXTRA": "mul3", "SALU_AFTER_VALUB": "mul4",
-           "BARRIER_WINDOW": "seed4", "BARRIER_BUSY": "v2_102", "BARRIER_SERIAL": "v2_109"}
+           "BARRIER_WINDOW": "v2_111", "BARRIER_BUSY": "v2_102", "BARRIER_SERIAL": "v2_109", "MEM_AFTER_EXEC": "seed2"}
 
 class TestSQTTHeldout(unittest.TestCase):
   def test_captures(self):

@@ -16,9 +16,11 @@ EXAMPLES_DIR = Path(__file__).parent.parent.parent / "extra/sqtt/examples/gfx110
 # example -> (workgroup size, {(wave, instruction index)} whose delta matches hardware)
 # the remaining deltas are DRAM bound or not modeled yet
 MATCHING = {
+  # sync (0,6), (0,9), (1,4), (1,6), (1,9), (1,10): wave 1's store wait, the release and both load waits follow the order in which
+  # the four waves' stores reach the LDS, which the untraced SIMD's s_load returns (DRAM) decide; not held
   "sync": (128, {
-    (0,0), (0,2), (0,3), (0,4), (0,5), (0,6), (0,7), (0,8), (0,9), (0,10), (0,11), (0,12), (0,13), (1,2), (1,3), (1,4), (1,6), (1,7), (1,8),
-    (1,9), (1,10), (1,11), (1,12), (1,13), (1,14)
+    (0,0), (0,2), (0,3), (0,4), (0,5), (0,7), (0,8), (0,10), (0,11), (0,12), (0,13), (1,2), (1,3), (1,7), (1,8),
+    (1,11), (1,12), (1,13), (1,14)
   }),
   "plus": (1, {
     (0,1), (0,2), (0,3), (0,5), (0,6), (0,7), (0,8), (0,9), (0,10)

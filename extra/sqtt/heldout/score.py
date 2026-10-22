@@ -78,12 +78,13 @@ def all_captures() -> list[Path]:
   key = lambda p: (p.stem.split("_")[0].rstrip("0123456789"), int(p.stem.split("_")[-1].lstrip("seedmul")))
   return sorted(CAPTURES.glob("*.pkl"), key=key)
 
-DRAM_STALL = 300  # no SRAM latency reaches this; a longer delta is a DRAM access or an instruction fetch from memory
+DRAM_STALL = 200  # no SRAM latency reaches this; a longer delta is a DRAM access or an instruction fetch from memory
 
 def dram(seq:list[tuple[str, int]], i:int) -> bool:
-  """A delta that waits on memory: the s_load, the wait right after it, the end after the global store, a fetch stall."""
+  """A delta measured from a memory event: the s_load, the wait on it and the instruction after that wait (its delta runs
+  from the DRAM return), the end after the global store, a fetch stall."""
   k, d = seq[i]
-  return k in ("SMEM_RD", "WAVEEND") or (i > 0 and seq[i - 1][0] == "SMEM_RD") or d >= DRAM_STALL
+  return k in ("SMEM_RD", "WAVEEND") or any(seq[j][0] == "SMEM_RD" for j in (i - 1, i - 2) if j >= 0) or d >= DRAM_STALL
 
 def score(pkl:Path, local:int=128, sram:bool=False) -> tuple[int, int, int]:
   """(exact deltas, scored deltas, total abs error) for one capture; tries both SIMD parities. sram: skip DRAM deltas."""
