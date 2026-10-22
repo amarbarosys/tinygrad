@@ -10,6 +10,9 @@ _NIB_COUNTS = {cls: nc for _, (cls, nc, *_) in _build_decode_tables(PACKET_TYPES
 LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
 # VALUB_4 (32-bit integer multiply): exec 3 later than a plain VALU, holds the pipe VALUB_OCC, the next SALU issues at +5
 VALUB_EXEC_EXTRA, VALUB_OCC, SALU_AFTER_VALUB = 3, 1, 5
+# barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
+BARRIER_WINDOW, BARRIER_BUSY = 2, 7
+BARRIER_SERIAL = 1  # the barrier unit counts one arrival per cycle per workgroup; the release follows the last one counted
 
 def _emit_nibbles(nibbles: list[int], pkt_cls: type[PacketType], **kwargs):
   raw = pkt_cls.encoding.default
@@ -192,6 +195,8 @@ def make_encoder():
     lds_q: list[tuple[int, int, bool, int, str|None, int]] = []  # (accept, wave, store, occupancy, load width, conflict cycles)
     ret_free: dict[int, float] = {0: 0, 2: 0}
     lds_last: dict[int, tuple[int, int]] = {}
+    bar_open: dict[tuple[int, int], int] = {}  # (workgroup, simd) -> arrival cycle that opened the current barrier window
+    bar_last: dict[int, int] = {}  # workgroup -> cycle of the last arrival the barrier unit counted
 
     def serve_lds(upto: int):
       """Start every queued LDS request whose service slot is decidable by cycle upto (accept = issue + LDS_ACCEPT)."""
@@ -241,6 +246,8 @@ def make_encoder():
           need = max(need, s["valu_issues"][-n] + VALU_DEP_LAT)
         elif 9 <= dep <= 11 and s["salu_issue"] is not None: need = max(need, s["salu_issue"] + 1 + dep - 8)
       if cls == "IMM" and s["last_cls"] in ("SALU", "VALU"): need = max(need, s["last_issue"] + IMM_AFTER_ALU)
+      bkey = (w // 64, simd[w])
+      if cls == "BARRIER" and (a := bar_open.get(bkey)) is not None and BARRIER_WINDOW <= need - a < BARRIER_BUSY: need = a + BARRIER_BUSY
       if cls == "VALU" and s["last_cls"] == "LDS":
         # The LDS pipe holds the next VALU issue even when no waitcnt is present.
         # gfx1100 traces show service-start +4 after a load and +5 after a b32 store.
@@ -349,7 +356,9 @@ def make_encoder():
           s["ready"] = cycle + (BRANCH_TAKEN if op == InstOp.JUMP else BRANCH_NOT_TAKEN)
           nxt = pcs[w][ph][s["i"]] if s["i"] < len(pcs[w][ph]) else None  # s["i"] already points past the branch
           if op == InstOp.JUMP and nxt is not None and nxt // 64 != pcs[w][ph][s["i"] - 1] // 64: s["ready"] += BRANCH_NEW_LINE
-        if cls == "BARRIER": s["arrival"] = cycle
+        if cls == "BARRIER":
+          s["arrival"] = bar_last[w // 64] = max(cycle, bar_last.get(w // 64, -1) + BARRIER_SERIAL) if BARRIER_SERIAL else cycle
+          if (a := bar_open.get(bkey)) is None or cycle - a >= BARRIER_WINDOW: bar_open[bkey] = cycle
         if primary: put(cycle, INST, wave=sl, op=InstOp.SALU_WR_EXEC if cls == "SALU" and "EXEC" in repr(getattr(inst, "sdst", "")) else op)
       return True
 
