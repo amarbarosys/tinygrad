@@ -1,55 +1,45 @@
-# Held-out SQTT timing: 73.6% exact on kernels the model never saw
+# Held-out SQTT timing: 91.2% of SRAM deltas exact on kernels the model never saw
 
-On 11 random SRAM kernels captured on a 7900 XTX, the mockgpu emulator's RDNA3 SQTT timing
-(`test/mockgpu/amd/sqtt_enc.py`) predicts 815 of 1108 instruction deltas to the cycle. None of these kernels
-were used to fit the timing rules. The fitted examples in `test/amd/test_sqtt_timing.py` score higher (gemm 52/59)
-because the rules were read off them, so 73.6% is the number to quote.
+On 20 random SRAM kernels (`randprobe_v2.py`, seeds 120-139) captured on a 7900 XTX after the timing rules were frozen,
+the mockgpu emulator's RDNA3 SQTT timing (`test/mockgpu/amd/sqtt_enc.py`) predicts 1712 of 1878 SRAM instruction deltas
+to the cycle (`score.py --sram`: the s_load, its wait, the instruction after it, the wave end and fetch stalls are DRAM
+and not counted; with them 1748/2058). The 41 captures in `captures/` (seed1-11, mul1-10, v2_100-119) were all used
+to fit and score 94.6%, 91.9% and 92.7%; the fresh 91.2% is the number to quote.
 
 `randprobe.py` builds the kernel from a seed: VALU, SALU, LDS store and load, `s_waitcnt`, `s_nop` and barriers,
-on 128 threads. `captures/` holds one real trace per seed (gfx1100, `profile_standard` clocks, SQTT on WGP 3).
-`score.py` replays each kernel in the emulator and compares every delta.
+on 128 threads; `randprobe_v2.py` adds the 32-bit integer multiplies (VALUB_4 on gfx1100). `captures/` holds one real
+trace per seed (gfx1100, `profile_standard` clocks, SQTT on WGP 3). `score.py` replays each kernel in the emulator,
+trying both hidden dispatcher states (which SIMD gets wave 0, which SIMD wins the first LDS tie), and compares every
+delta; `misses.py` prints every scored wave instruction by instruction.
 
 ```
-$ PYTHONPATH=. python3 extra/sqtt/heldout/score.py
-  seed1:  76/94  exact (80.9%), mean abs error 29.54 cycles
-  seed2:  61/84  exact (72.6%), mean abs error 30.38 cycles
-  seed3:  72/104 exact (69.2%), mean abs error 26.40 cycles
-  seed4:  72/108 exact (66.7%), mean abs error 26.23 cycles
-  seed5:  77/100 exact (77.0%), mean abs error 12.99 cycles
-  seed6:  68/90  exact (75.6%), mean abs error 14.82 cycles
-  seed7:  81/108 exact (75.0%), mean abs error 25.44 cycles
-  seed8:  72/102 exact (70.6%), mean abs error 27.21 cycles
-  seed9:  83/112 exact (74.1%), mean abs error 9.86 cycles
- seed10:  68/90  exact (75.6%), mean abs error 30.23 cycles
- seed11:  85/116 exact (73.3%), mean abs error 36.29 cycles
-  total: 815/1108 exact (73.6%)
+$ PYTHONPATH=. python3 extra/sqtt/heldout/score.py --sram .work/sqtt/fresh2/seed*/profile_randprobe_v2.pkl
+  ... 20 seeds, 83.0% to 98.7% each, mean abs error 0.03 to 0.46 cycles
+  total: 1712/1878 exact (91.2%) SRAM only
+$ PYTHONPATH=. python3 extra/sqtt/heldout/score.py --sram      # the 41 fitted captures
+  total: 3505/3768 exact (93.0%) SRAM only
 ```
 
-## The large misses are DRAM, the in-scope ones are small
+## What is still wrong on the fresh set
 
-Seeds 1-10, wave 0:
+| packet | misses / scored | cause |
+|---|---|---|
+| LDS_WR_2, LDS_RD | 68 / 236 | issue +-1..4 after VALUB_4 -> VALU chains and after SALU, the multiply's pipe against three other waves |
+| IMMEDIATE | 33 / 300 | LDS return order between SIMDs, barrier release +-1 |
+| VALUINST | 24 / 598 | first VALU after a release or an LDS store |
+| VALUB_4 | 20 / 216 | issue after a barrier or an LDS store |
+| SGMEM_WR_2 | 11 / 38 | global store after VALUB_4 -> VALU -> free wait |
+| BARRIER, SALU | 10 / 490 | arrival of the untraced SIMD's waves |
 
-| packet | misses | mean error (cycles) | where |
-|---|---|---|---|
-| IMMEDIATE (`s_waitcnt`) | 41 | 29 | partly waits on the DRAM load below |
-| VALUINST | 39 | 6 | VALU issue |
-| WAVEEND | 10 | 529 | after the global store (DRAM) |
-| SMEM_RD | 10 | 464 | first `s_load` (DRAM) |
-| LDS_WR_2, LDS_RD | 10 | 1-2 | LDS |
-| SALU, SGMEM_WR_2 | 7 | 2-3 | scalar |
-
-Open gap: hardware traces `v_mul_lo_u32` as `VALUB_4`, the emulator emits `VALUINST`. The generator leaves it out
-until that is fixed.
-
-## The test holds every seed at its score
+## The tests hold every capture at its score
 
 ```
 DEV=MOCK+AMD python -m pytest test/amd/test_sqtt_heldout.py test/amd/test_sqtt_timing.py
 ```
 
-`test/amd/test_sqtt_heldout.py` fails if any seed loses an exact delta, so a rule that improves the fitted
-examples at the cost of unseen kernels does not land. Checked with a mutant: `VALU_AFTER_LDS_WAIT` 7 -> 9 drops
-seeds 2, 8 and 9 below their floor.
+`test/amd/test_sqtt_heldout.py` fails if any of the 41 captures loses an exact delta, and moves every measured constant
+by one cycle either way to check that a named capture loses deltas (VALUB_4 exec and SALU hold, barrier window, busy and
+serial counting, LDS-to-VALU offsets, LDS after VALU exec, multiply pipe occupancy).
 
 ## Capturing a new seed
 
@@ -57,6 +47,7 @@ Needs a 7900 XTX and [wavewait](https://github.com/amarbaro/wavewait)'s `tools/s
 `wgp-probe.patch` applied to this checkout:
 
 ```
-SQTT_SEED=12 SQTT_WGP_PROBE=3 TINYGRAD=$PWD sqtt-capture $PWD/extra/sqtt/heldout/randprobe.py OUT
-PYTHONPATH=. python3 extra/sqtt/heldout/score.py OUT/profile_randprobe.pkl
+git apply .work/sqtt/wgp-probe.patch          # trace WGP 3; WGP 0 and 1 give waves without instruction tokens on this card
+SQTT_SEED=140 SQTT_WGP_PROBE=3 TINYGRAD=$PWD sqtt-capture $PWD/extra/sqtt/heldout/randprobe_v2.py OUT
+PYTHONPATH=. python3 extra/sqtt/heldout/score.py --sram OUT/profile_randprobe_v2.pkl
 ```
