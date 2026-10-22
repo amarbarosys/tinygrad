@@ -8,6 +8,8 @@ from tinygrad.renderer.amd.sqtt import (_build_decode_tables, PACKET_TYPES_RDNA3
 
 _NIB_COUNTS = {cls: nc for _, (cls, nc, *_) in _build_decode_tables(PACKET_TYPES_RDNA3)[0].items()}
 LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
+# VALUB_4 (32-bit integer multiply): exec 3 later than a plain VALU, holds the pipe VALUB_OCC, the next SALU issues at +5
+VALUB_EXEC_EXTRA, VALUB_OCC, SALU_AFTER_VALUB = 3, 1, 5
 
 def _emit_nibbles(nibbles: list[int], pkt_cls: type[PacketType], **kwargs):
   raw = pkt_cls.encoding.default
@@ -170,7 +172,7 @@ def make_encoder():
                   lgkm=[], vm=[], vs=[], arrival=None, lds_wait=0, valu_execs=[], valu_issues=[],
                   early_valu=False, last_mem=None, last_lds_store=False, last_lds_service=None, lds_dst=set(), valu_sread={},
                   wmma_done=[], wmma_ready={}, vsgpr_exec={}, pend=[], last_issue=0, salu_gate=False,
-                  last_cls=None) for w in waves}
+                  last_cls=None, last_valub=False) for w in waves}
     valu_free, trans_free, unit = {0: 0, 2: 0}, {0: 0, 2: 0}, dict(lds=0)
     port_free: dict[tuple[int, str], int] = {}
     # instruction cache: 64 B lines fetched in aligned blocks of ahead + 1 lines (s_set_inst_prefetch_distance, default 3);
@@ -228,6 +230,7 @@ def make_encoder():
         need = max(need, s["salu_exec"] + BRANCH_AFTER_SALU)  # waits for its SCC/VCC producer
       if cls == "SALU":  # overwriting an SGPR that an issued VALU has not read yet waits for that VALU's exec
         need = max([need] + [s["valu_sread"][r] for r in writes if r in s["valu_sread"]])
+        if s["last_cls"] == "VALU" and s["last_valub"]: need = max(need, s["last_issue"] + SALU_AFTER_VALUB)
       if cls in ("SALU", "SMEM", "BR"):  # an SGPR or VCC written by a VALU stalls the scalar reader until exec + 9
         need = max([need] + [s["vsgpr_exec"][r] + VALU_TO_SCALAR for r in reads | ({"s106"} if "VCC" in _name(inst) else set())
                              if r in s["vsgpr_exec"]])
@@ -285,7 +288,8 @@ def make_encoder():
         lat = VALU_EXEC_LAT_NOREAD if not reads else VALU_EXEC_LAT_SLOW if _SLOW_VALU.search(_name(inst)) else VALU_EXEC_LAT
         if s["early_valu"] and not reads & s["lds_dst"]: lat = min(lat, VALU_AFTER_LDS_WAIT)
         s["early_valu"] = False
-        base = cycle + lat
+        valub = op is not None and op.name.startswith("VALUB_")
+        base = cycle + lat + (VALUB_EXEC_EXTRA if valub else 0)
         wmma = _name(inst).startswith("V_WMMA")
         ready, trans = s["wmma_ready"] if wmma else s["reg_ready"], _port(op) == "TRANS"
         ex = max([base, valu_free[simd[w]], trans_free[simd[w]] if trans else 0] + [ready.get(r, 0) for r in reads])
@@ -293,7 +297,8 @@ def make_encoder():
         # accumulating in place: the forwarded register is also the destination and another source shares its VGPR bank
         if ex == base and any(s["reg_ready"].get(d) == ex and any(o != d and o[0] == "v" and int(o[1:]) % 4 == int(d[1:]) % 4
                                                                   for o in reads) for d in writes & reads if d[0] == "v"): ex += 1
-        valu_free[simd[w]], s["valu_exec"] = ex + 1, ex
+        valu_free[simd[w]], s["valu_exec"] = ex + (VALUB_OCC if valub else 1), ex
+        s["last_valub"] = valub
         if wmma:  # holds the pipe WMMA_LAT cycles; its exec token marks completion
           ex += WMMA_LAT
           valu_free[simd[w]], s["valu_exec"] = ex + 1, ex
