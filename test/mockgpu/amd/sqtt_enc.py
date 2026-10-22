@@ -10,8 +10,10 @@ _NIB_COUNTS = {cls: nc for _, (cls, nc, *_) in _build_decode_tables(PACKET_TYPES
 LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
 # VALUB_4 (32-bit integer multiply): exec 3 later than a plain VALU, holds the pipe VALUB_OCC, the next SALU issues at +5
 VALUB_EXEC_EXTRA, VALUB_OCC, SALU_AFTER_VALUB = 3, 1, 5
+MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 # barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
 BARRIER_WINDOW, BARRIER_BUSY = 2, 7
+LDS_NEWEST, LDS_TIE_ALTERNATE = 1, 1  # LDS arbitration between SIMDs: newest-accepted head wins; equal: idle -> alternate, busy -> stay
 BARRIER_SERIAL = 1  # the barrier unit counts one arrival per cycle per workgroup; the release follows the last one counted
 
 def _emit_nibbles(nibbles: list[int], pkt_cls: type[PacketType], **kwargs):
@@ -29,6 +31,7 @@ def make_encoder():
   import math, re, sys
   from tinygrad.helpers import getenv
   SQTT_TRACE = getenv("SQTT_TRACE", 0)  # print every scheduled packet, all waves, to stderr
+  LDS_FIRST = getenv("SQTT_LDS_PARITY", 0) * 2  # which SIMD wins the first idle LDS tie: hidden arbiter state, the scorer tries both
   SIMD_PARITY = getenv("SQTT_SIMD_PARITY", 0)  # which SIMD of the pair gets wave 0: the dispatcher's round robin carries over
 
   def _kinds(*names: str) -> tuple[type[Inst], ...]:
@@ -90,9 +93,9 @@ def make_encoder():
   # crossings between units: VALU-written SGPR/VCC read by SALU at exec + 9, VALU after SALU exec + 5, s_nop after ALU + 3
   VALU_TO_SCALAR, VALU_AFTER_SALU, IMM_AFTER_ALU, SLEEP_CYCLES = 9, 5, 3, 24  # s_sleep 1 measured once
   # memory issue after the last VALU exec, SMEM after SALU, waitcnt token after memory issue
-  MEM_AFTER_EXEC, SMEM_AFTER_SALU, IMM_AFTER_MEM, WAITCNT_FREE_PENALTY, BARRIER_RELEASE = 9, 9, 3, 4, 12
-  # LDS: one server, accept +3 (+8 for a store racing another wave's on the same SIMD), 8 queued per SIMD
-  LDS_ACCEPT, LDS_ACCEPT_LATE, LDS_RET, LDS_QUEUE = 3, 8, 28, 8
+  SMEM_AFTER_SALU, IMM_AFTER_MEM, WAITCNT_FREE_PENALTY, BARRIER_RELEASE = 9, 3, 4, 12
+  # LDS: one server, accept +3, 8 queued per SIMD
+  LDS_ACCEPT, LDS_RET, LDS_QUEUE = 3, 28, 8
   # load return per width: (extra latency, cycles on the return path; b128 moves 512 B in 16/3 cycles)
   LDS_RET_WIDE = {"32": (0, 1), "64": (4, 4), "96": (4, 5), "128": (6, 16 / 3)}
   # DRAM: rough, not exact targets
@@ -177,6 +180,7 @@ def make_encoder():
                   mem_issue=None, reg_ready={},
                   lgkm=[], vm=[], vs=[], arrival=None, lds_wait=0, valu_execs=[], valu_issues=[],
                   early_valu=False, last_mem=None, last_lds_store=False, last_lds_service=None, lds_dst=set(), valu_sread={},
+
                   wmma_done=[], wmma_ready={}, vsgpr_exec={}, pend=[], last_issue=0, salu_gate=False,
                   last_cls=None, last_valub=False) for w in waves}
     valu_free, trans_free, unit = {0: 0, 2: 0}, {0: 0, 2: 0}, dict(lds=0)
@@ -197,16 +201,20 @@ def make_encoder():
       return sum(1 for n in range(len(st_)) if (i := ((n + 1) | 1) - 1) < len(st_) and st_[i] <= cycle)
     lds_q: list[tuple[int, int, bool, int, str|None, int]] = []  # (accept, wave, store, occupancy, load width, conflict cycles)
     ret_free: dict[int, float] = {0: 0, 2: 0}
-    lds_last: dict[int, tuple[int, int]] = {}
     bar_open: dict[tuple[int, int], int] = {}  # (workgroup, simd) -> arrival cycle that opened the current barrier window
     bar_last: dict[int, int] = {}  # workgroup -> cycle of the last arrival the barrier unit counted
 
     def serve_lds(upto: int):
       """Start every queued LDS request whose service slot is decidable by cycle upto (accept = issue + LDS_ACCEPT)."""
       while lds_q and (t := max(unit["lds"], min(r[0] for r in lds_q))) < upto + LDS_ACCEPT:
-        cand = [r for r in lds_q if r[0] <= t]  # the traced SIMD's port wins whenever it has a ready request, FIFO within a SIMD
-        idle_tie = t > unit["lds"] and len({simd[r[1]] for r in cand}) > 1  # both ports became ready while the server sat idle
-        r = next((r for r in cand if simd[r[1]] == (2 if idle_tie else 0)), cand[0])
+        cand = [r for r in lds_q if r[0] <= t]  # FIFO within a SIMD; between SIMDs the most recently accepted head wins
+        heads = {sm: next(r for r in cand if simd[r[1]] == sm) for sm in {simd[r[1]] for r in cand}}
+        last = unit.get("lds_simd")
+        if len(heads) == 1: pick = next(iter(heads))
+        elif heads[0][0] != heads[2][0]: pick = max(heads, key=lambda sm: heads[sm][0]) if LDS_NEWEST else min(heads, key=lambda sm: heads[sm][0])
+        else: pick = LDS_FIRST if last is None else (2 - last if t > unit["lds"] else last) if LDS_TIE_ALTERNATE else last if last is not None else LDS_FIRST
+        r = heads[pick]
+        unit["lds_simd"] = simd[r[1]]
         lds_q.remove(r)
         if SQTT_TRACE: print(f"{t:>7} LDS_SERVICE wave {r[1]} simd {simd[r[1]]} {'store' if r[2] else 'load'} issued {r[0] - LDS_ACCEPT}", file=sys.stderr)
         lds_starts[simd[r[1]]].append(t)
@@ -331,12 +339,9 @@ def make_encoder():
         store = "STORE" in _name(inst)
         occ = (_cycles(op) if op else 1) if store else 1
         width = (m.group(1) if (m := re.search(r'_B(32|64|96|128)$', _name(inst))) else "32") if not store else None
-        last = lds_last.get(simd[w])  # another wave's request on this SIMD within 3 cycles: accepted late (sync s0w1 store, issue + 8)
-        acc = LDS_ACCEPT_LATE if last is not None and last[0] != w and store and cycle - last[1] < 3 else LDS_ACCEPT
-        lds_last[simd[w]] = (w, cycle)
-        if not store: s["lds_dst"] |= writes
         conflict = lanes[w][ph][s["i"] - 1][1] - 1  # bank conflicts serialize the access, the data follows it
-        lds_q.append((cycle + acc, w, store, occ + conflict, width, conflict))
+        if not store: s["lds_dst"] |= writes
+        lds_q.append((cycle + LDS_ACCEPT, w, store, occ + conflict, width, conflict))
         lds_issued[simd[w]] += 1
         s["lds_wait"] += 1
         s["mem_issue"] = cycle

@@ -52,19 +52,26 @@ def _replay(pkl:Path, local:int=128):
   bufs = [(ctypes.c_uint8 * (1 << 20))() for _ in range(4)]
   args = (ctypes.c_uint64 * 64)(*[ctypes.addressof(b) for b in bufs])
   cbuf = (ctypes.c_char * len(code)).from_buffer_copy(code)
-  for parity in (0, 1):  # which SIMD of the pair gets wave 0 is not modeled yet
-    os.environ["SQTT_SIMD_PARITY"] = str(parity); getenv.cache_clear()
+  best: tuple[int, int, dict] = (-1, 0, {})
+  saved = {k: os.environ.get(k) for k in ("SQTT_SIMD_PARITY", "SQTT_LDS_PARITY")}
+  for parity in range(4):  # which SIMD gets wave 0 and which wins the first LDS tie are hidden dispatcher state: best of four
+    os.environ["SQTT_SIMD_PARITY"], os.environ["SQTT_LDS_PARITY"] = str(parity & 1), str(parity >> 1); getenv.cache_clear()
     sqtt_traces.clear()
     with Context(PROFILE=1, ASM_CALL=0):
       run_asm(ctypes.addressof(cbuf), len(code), 1, 1, 1, local, 1, 1, ctypes.addressof(args))
     emu = primary(list(sqtt_traces))
-    n = 0
+    hit = 0
     for rw, ew in zip(sorted(real), sorted(emu)):
       rs, es = real[rw], emu[ew]
       if [k for k, _ in rs] != [k for k, _ in es]: continue
-      n += len(rs)
-    if n: return real, emu
-  return real, {}
+      hit += 1 + sum(rd == ed for (_, rd), (_, ed) in zip(rs, es))
+    if hit > best[0]: best = (hit, parity, emu)
+  for k, v in saved.items():  # leave the emulator's hidden-state knobs as they were
+    if v is None: os.environ.pop(k, None)
+    else: os.environ[k] = v
+  getenv.cache_clear()
+  if os.environ.get("SQTT_TRACE"): print(f"SQTT_CHOSEN {best[1]}", file=sys.stderr)
+  return real, best[2]
 
 def all_captures() -> list[Path]:
   """Every capture: seed1-11 (randprobe), mul1-10 (randprobe_mul), v2_100-119 (randprobe_v2), in that order."""
