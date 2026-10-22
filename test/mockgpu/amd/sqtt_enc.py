@@ -9,13 +9,14 @@ from tinygrad.renderer.amd.sqtt import (_build_decode_tables, PACKET_TYPES_RDNA3
 _NIB_COUNTS = {cls: nc for _, (cls, nc, *_) in _build_decode_tables(PACKET_TYPES_RDNA3)[0].items()}
 LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
 # VALUB_4 (32-bit integer multiply): exec 3 later than a plain VALU, holds the pipe VALUB_OCC, the next SALU issues at +5
-VALUB_EXEC_EXTRA, VALUB_OCC, SALU_AFTER_VALUB = 3, 1, 5
+VALUB_EXEC_EXTRA, VALUB_OCC, SALU_AFTER_VALUB = 3, 4, 5
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 # barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
 BARRIER_WINDOW, BARRIER_BUSY = 2, 7
-LDS_NEWEST, LDS_TIE_ALTERNATE = 1, 1
-SHARED_ISSUE = ("IMM", "BARRIER")  # classes two waves of a SIMD issue in one cycle (waits of several waves make one IMMEDIATE_MASK)  # LDS arbitration between SIMDs: newest-accepted head wins; equal: idle -> alternate, busy -> stay
+LDS_NEWEST, LDS_TIE_ALTERNATE = 1, 1  # LDS arbitration between SIMDs: newest-accepted head wins; equal: idle -> alternate, busy -> stay
+SHARED_ISSUE = ("IMM",)  # classes two waves of a SIMD issue in one cycle (waits of several waves make one IMMEDIATE_MASK)
 BARRIER_SERIAL = 1  # the barrier unit counts one arrival per cycle per workgroup; the release follows the last one counted
+BARRIER_RELEASE, BARRIER_WINDOW_PER_SIMD = 12, 1  # release after the last counted arrival; the window is per SIMD (else per WGP)
 
 def _emit_nibbles(nibbles: list[int], pkt_cls: type[PacketType], **kwargs):
   raw = pkt_cls.encoding.default
@@ -94,7 +95,7 @@ def make_encoder():
   # crossings between units: VALU-written SGPR/VCC read by SALU at exec + 9, VALU after SALU exec + 5, s_nop after ALU + 3
   VALU_TO_SCALAR, VALU_AFTER_SALU, IMM_AFTER_ALU, SLEEP_CYCLES = 9, 5, 3, 24  # s_sleep 1 measured once
   # memory issue after the last VALU exec, SMEM after SALU, waitcnt token after memory issue
-  SMEM_AFTER_SALU, IMM_AFTER_MEM, WAITCNT_FREE_PENALTY, BARRIER_RELEASE = 9, 3, 4, 12
+  SMEM_AFTER_SALU, IMM_AFTER_MEM, WAITCNT_FREE_PENALTY = 9, 3, 4
   # LDS: one server, accept +3, 8 queued per SIMD
   LDS_ACCEPT, LDS_RET, LDS_QUEUE = 3, 28, 8
   # load return per width: (extra latency, cycles on the return path; b128 moves 512 B in 16/3 cycles)
@@ -259,7 +260,7 @@ def make_encoder():
           need = max(need, s["valu_issues"][-n] + VALU_DEP_LAT)
         elif 9 <= dep <= 11 and s["salu_issue"] is not None: need = max(need, s["salu_issue"] + 1 + dep - 8)
       if cls == "IMM" and s["last_cls"] in ("SALU", "VALU"): need = max(need, s["last_issue"] + IMM_AFTER_ALU)
-      bkey = (w // 64, simd[w])
+      bkey = (w // 64, simd[w] if BARRIER_WINDOW_PER_SIMD else 0)
       if cls == "BARRIER" and (a := bar_open.get(bkey)) is not None and BARRIER_WINDOW <= need - a < BARRIER_BUSY: need = a + BARRIER_BUSY
       if cls == "VALU" and s["lds_hold"]:  # the LDS pipe holds the next VALU: service start +4 after a load, +5 after a b32 store
         if s["last_lds_service"] is None: need = max(need, cycle + 1)
