@@ -66,14 +66,28 @@ def _replay(pkl:Path, local:int=128):
     if n: return real, emu
   return real, {}
 
-def score(pkl:Path, local:int=128) -> tuple[int, int, int]:
-  """(exact deltas, scored deltas, total abs error) for one capture; tries both SIMD parities."""
+def all_captures() -> list[Path]:
+  """Every capture: seed1-11 (randprobe), mul1-10 (randprobe_mul), v2_100-119 (randprobe_v2), in that order."""
+  key = lambda p: (p.stem.split("_")[0].rstrip("0123456789"), int(p.stem.split("_")[-1].lstrip("seedmul")))
+  return sorted(CAPTURES.glob("*.pkl"), key=key)
+
+DRAM_STALL = 300  # no SRAM latency reaches this; a longer delta is a DRAM access or an instruction fetch from memory
+
+def dram(seq:list[tuple[str, int]], i:int) -> bool:
+  """A delta that waits on memory: the s_load, the wait right after it, the end after the global store, a fetch stall."""
+  k, d = seq[i]
+  return k in ("SMEM_RD", "WAVEEND") or (i > 0 and seq[i - 1][0] == "SMEM_RD") or d >= DRAM_STALL
+
+def score(pkl:Path, local:int=128, sram:bool=False) -> tuple[int, int, int]:
+  """(exact deltas, scored deltas, total abs error) for one capture; tries both SIMD parities. sram: skip DRAM deltas."""
   real, emu = _replay(pkl, local)
   hit = n = err = 0
   for rw, ew in zip(sorted(real), sorted(emu)):
     rs, es = real[rw], emu[ew]
     if [k for k, _ in rs] != [k for k, _ in es]: continue
-    for (_, rd), (_, ed) in zip(rs, es): n += 1; hit += rd == ed; err += abs(rd - ed)
+    for i, ((_, rd), (_, ed)) in enumerate(zip(rs, es)):
+      if sram and dram(rs, i): continue
+      n += 1; hit += rd == ed; err += abs(rd - ed)
   return hit, n, err
 
 def score_detail(pkl:Path, local:int=128) -> dict[str, tuple[int, int, int]]:
@@ -88,10 +102,11 @@ def score_detail(pkl:Path, local:int=128) -> dict[str, tuple[int, int, int]]:
   return {k: tuple(v) for k, v in out.items()}
 
 if __name__ == "__main__":
-  pkls = [Path(p) for p in sys.argv[1:]] or sorted(CAPTURES.glob("seed*.pkl"), key=lambda p: int(p.stem[4:]))
+  sram = "--sram" in sys.argv
+  pkls = [Path(p) for p in sys.argv[1:] if p != "--sram"] or all_captures()
   th = tn = 0
   for p in pkls:
-    hit, n, err = score(p)
+    hit, n, err = score(p, sram=sram)
     th, tn = th + hit, tn + n
     print(f"{p.stem:>7}: {hit:>3}/{n:<3} exact ({100 * hit / max(n, 1):.1f}%), mean abs error {err / max(n, 1):.2f} cycles")
-  print(f"  total: {th}/{tn} exact ({100 * th / max(tn, 1):.1f}%)")
+  print(f"  total: {th}/{tn} exact ({100 * th / max(tn, 1):.1f}%){' SRAM only' if sram else ''}")
