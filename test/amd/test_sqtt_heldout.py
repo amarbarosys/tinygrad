@@ -23,7 +23,7 @@ class TestSQTTHeldout(unittest.TestCase):
         self.assertGreaterEqual(hit, want, f"seed {seed}: {hit}/{n} exact, recorded {want}")
 
   def test_lds_to_valu_mutants(self):
-    """The measured +7/+8 LDS successor hazards must be falsifiable."""
+    """The measured +4/+5 LDS service-start offsets must be falsifiable."""
     base = (sqtt_enc.LDS_TO_VALU_LOAD, sqtt_enc.LDS_TO_VALU_STORE)
     try:
       for name, seed in (("LDS_TO_VALU_LOAD", 1), ("LDS_TO_VALU_STORE", 4)):
