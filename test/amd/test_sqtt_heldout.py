@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emulator SQTT timing on held-out kernels: random SRAM probes captured on a 7900 XTX.
 
-seed1-11 (randprobe), mul1-10 (randprobe_mul) and v2_100-139 (randprobe_v2) were each captured once, before the rules
+seed1-11 (randprobe), mul1-10 (randprobe_mul) and v2_100-159 (randprobe_v2) were each captured once, before the rules
 that followed were written; by now every set has been used to fit, so a fresh set must be captured to validate.
 Each capture must keep at least its recorded number of exact deltas; a timing change that helps the fitted
 examples but costs held-out accuracy fails here. Every measured constant is checked to be falsifiable: moved by
@@ -25,7 +25,11 @@ FLOOR = {"mul1": (80, 94), "mul2": (76, 84), "mul3": (90, 100), "mul4": (90, 100
          "v2_120": (105, 116), "v2_121": (88, 94), "v2_122": (96, 114), "v2_123": (76, 84), "v2_124": (91, 102),
          "v2_125": (86, 100), "v2_126": (77, 88), "v2_127": (78, 88), "v2_128": (89, 98), "v2_129": (105, 118),
          "v2_130": (103, 120), "v2_131": (93, 108), "v2_132": (101, 112), "v2_133": (102, 122), "v2_134": (101, 114),
-         "v2_135": (98, 116), "v2_136": (92, 106), "v2_137": (77, 86), "v2_138": (86, 96), "v2_139": (66, 76)}
+         "v2_135": (98, 116), "v2_136": (92, 106), "v2_137": (77, 86), "v2_138": (86, 96), "v2_139": (66, 76),
+         "v2_140": (86, 94), "v2_141": (108, 118), "v2_142": (99, 120), "v2_143": (86, 94), "v2_144": (113, 124),
+         "v2_145": (98, 108), "v2_146": (90, 96), "v2_147": (90, 96), "v2_148": (99, 114), "v2_149": (83, 92),
+         "v2_150": (92, 106), "v2_151": (90, 108), "v2_152": (106, 114), "v2_153": (114, 124), "v2_154": (86, 96),
+         "v2_155": (100, 112), "v2_156": (99, 116), "v2_157": (102, 116), "v2_158": (90, 100), "v2_159": (98, 110)}
 # constant -> capture whose exact count drops when the constant moves by one cycle either way
 MUTANTS = {"LDS_TO_VALU_LOAD": "mul2", "LDS_TO_VALU_STORE": "mul4", "SALU_AFTER_VALUB": "mul4",
            "BARRIER_WINDOW": "v2_111", "BARRIER_BUSY": "v2_102", "BARRIER_SERIAL": "v2_109", "MEM_AFTER_EXEC": "seed2", "VALUB_OCC": "v2_104",

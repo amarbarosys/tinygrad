@@ -74,7 +74,7 @@ def _replay(pkl:Path, local:int=128):
   return real, best[2]
 
 def all_captures() -> list[Path]:
-  """Every capture: seed1-11 (randprobe), mul1-10 (randprobe_mul), v2_100-139 (randprobe_v2), in that order."""
+  """Every capture: seed1-11 (randprobe), mul1-10 (randprobe_mul), v2_100-159 (randprobe_v2), in that order."""
   def key(p:Path) -> tuple[str, int]: return p.stem.split("_")[0].rstrip("0123456789"), int(p.stem.split("_")[-1].lstrip("seedmul"))
   return sorted(CAPTURES.glob("*.pkl"), key=key)
 
