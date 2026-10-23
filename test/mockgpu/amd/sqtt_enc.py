@@ -11,8 +11,8 @@ LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
 # VALUB_4 (32-bit integer multiply): starts like a plain VALU, holds the pipe VALUB_OCC, its exec token is the last of them;
 # the next SALU issues at +5
 VALUB_OCC, SALU_AFTER_VALUB = 4, 5
-# a VALU execs a cycle later when an operand is cold: a VGPR first read after a v_mov or a memory load wrote it, a VGPR its
-# previous-cycle VALU read, an SGPR or a literal; or when two of its VGPR operands sit in one bank (v % 4)
+# a VALU execs a cycle later when an operand is cold: a VGPR first read after a v_mov or a memory load wrote it, an SGPR
+# or a literal; or when two of its VGPR operands sit in one bank (v % 4)
 COLD_READ = 1
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 VMEM_AFTER_SALU = 7  # a global access issues this long after the last SALU of its wave
@@ -184,7 +184,7 @@ def make_encoder():
     st: dict[int, dict[str, Any]] = {w: dict(i=0, ready=rank[w] + FETCH_LAT, blocked=False, valu_exec=None, salu_issue=None, salu_exec=None,
                   mem_issue=None, reg_ready={},
                   lgkm=[], vm=[], vs=[], arrival=None, lds_wait=0, valu_execs=[], valu_issues=[],
-                  last_mem=None, last_lds_store=False, last_lds_service=None, lds_hold=False, valu_sread={}, cold=set(), prev_vreads=(None, set()),
+                  last_mem=None, last_lds_store=False, last_lds_service=None, lds_hold=False, valu_sread={}, cold=set(),
 
                   wmma_done=[], wmma_ready={}, vsgpr_exec={}, pend=[], last_issue=0, salu_gate=False,
                   last_cls=None, last_valub=False) for w in waves}
@@ -313,9 +313,8 @@ def make_encoder():
         vr = {r for r in reads if r[0] == "v"}
         sr = _regs(inst, ("src0", "src1")) - vr or "LIT" in repr(inst)  # an SGPR or literal operand
         banks = [int(r[1:]) % 4 for r in vr | (writes if "FMAC" in _name(inst) else set())]  # fmac reads its accumulator too
-        if lat == VALU_EXEC_LAT and (sr or len(set(banks)) < len(banks) or vr & s["cold"] or
-                                     (s["prev_vreads"][0] == cycle - 1 and vr & s["prev_vreads"][1])): lat += COLD_READ
-        s["prev_vreads"], s["cold"] = (cycle, vr), (s["cold"] - vr - writes) | (writes if not reads else set())
+        if lat == VALU_EXEC_LAT and (sr or len(set(banks)) < len(banks) or vr & s["cold"]): lat += COLD_READ
+        s["cold"] = (s["cold"] - vr - writes) | (writes if not reads else set())
         valub = op is not None and op.name.startswith("VALUB_")
         base = cycle + lat
         wmma = _name(inst).startswith("V_WMMA")
