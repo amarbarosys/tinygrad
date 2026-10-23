@@ -216,6 +216,7 @@ def make_encoder():
         heads = {sm: next(r for r in cand if simd[r[1]] == sm) for sm in {simd[r[1]] for r in cand}}
         last = unit.get("lds_simd")
         if len(heads) == 1: pick = next(iter(heads))
+        elif heads[0][0] == heads[2][0] and heads[0][2] != heads[2][2]: pick = 0 if heads[0][2] else 2  # equal heads: store first
         elif last in heads and t == unit["lds"]: pick = last
         elif heads[0][0] != heads[2][0]: pick = max(heads, key=lambda sm: heads[sm][0])
         else: pick = LDS_FIRST if last is None else 2 - last  # equal heads on an idle server: alternate
