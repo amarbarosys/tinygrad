@@ -11,8 +11,8 @@ LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
 # VALUB_4 (32-bit integer multiply): starts like a plain VALU, holds the pipe VALUB_OCC, its exec token is the last of them;
 # the next SALU issues at +5
 VALUB_OCC, SALU_AFTER_VALUB = 4, 5
-# a VALU execs a cycle later when an operand is cold: a VGPR no VALU has read since the wave started or a memory load wrote
-# it (v_mov and VALU writes keep a VGPR warm), an SGPR or a literal; or when two of its VGPR operands sit in one bank (v % 4)
+# a VALU execs a cycle later when an operand is cold, a VGPR no VALU has read since the wave started or a memory load wrote
+# it (v_mov and VALU writes keep a VGPR warm); when two of its VGPR operands sit in one bank (v % 4); when it writes VCC/SGPRs
 COLD_READ = 1
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 VMEM_AFTER_SALU = 7  # a global access issues this long after the last SALU of its wave
@@ -311,9 +311,9 @@ def make_encoder():
       elif cls == "VALU":
         lat = VALU_EXEC_LAT_NOREAD if not reads else VALU_EXEC_LAT_SLOW if _SLOW_VALU.search(_name(inst)) else VALU_EXEC_LAT
         vr = {r for r in reads if r[0] == "v"}
-        sr = _regs(inst, ("src0", "src1")) - vr or "LIT" in repr(inst)  # an SGPR or literal operand
+        sw = {r for r in writes if r[0] == "s"} or re.search(r"V_CMP_|V_ADD_CO|V_SUB_CO", _name(inst))
         banks = [int(r[1:]) % 4 for r in vr | (writes if "FMAC" in _name(inst) else set())]  # fmac reads its accumulator too
-        if lat == VALU_EXEC_LAT and (sr or len(set(banks)) < len(banks) or vr - s["warm"]): lat += COLD_READ
+        if lat == VALU_EXEC_LAT and (sw or len(set(banks)) < len(banks) or vr - s["warm"]): lat += COLD_READ
         s["warm"] |= vr
         valub = op is not None and op.name.startswith("VALUB_")
         base = cycle + lat
