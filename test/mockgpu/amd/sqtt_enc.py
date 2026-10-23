@@ -12,7 +12,7 @@ LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
 # the next SALU issues at +5
 VALUB_OCC, SALU_AFTER_VALUB = 4, 5
 # a VALU execs a cycle later when an operand is cold: a VGPR first read after a v_mov or a memory load wrote it, a VGPR its
-# previous-cycle VALU read, an SGPR or a literal
+# previous-cycle VALU read, an SGPR or a literal; or when two of its VGPR operands sit in one bank (v % 4)
 COLD_READ = 1
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 VMEM_AFTER_SALU = 7  # a global access issues this long after the last SALU of its wave
@@ -312,7 +312,9 @@ def make_encoder():
         lat = VALU_EXEC_LAT_NOREAD if not reads else VALU_EXEC_LAT_SLOW if _SLOW_VALU.search(_name(inst)) else VALU_EXEC_LAT
         vr = {r for r in reads if r[0] == "v"}
         sr = _regs(inst, ("src0", "src1")) - vr or "LIT" in repr(inst)  # an SGPR or literal operand
-        if lat == VALU_EXEC_LAT and (sr or vr & s["cold"] or (s["prev_vreads"][0] == cycle - 1 and vr & s["prev_vreads"][1])): lat += COLD_READ
+        banks = [int(r[1:]) % 4 for r in vr | (writes if "FMAC" in _name(inst) else set())]  # fmac reads its accumulator too
+        if lat == VALU_EXEC_LAT and (sr or len(set(banks)) < len(banks) or vr & s["cold"] or
+                                     (s["prev_vreads"][0] == cycle - 1 and vr & s["prev_vreads"][1])): lat += COLD_READ
         s["prev_vreads"], s["cold"] = (cycle, vr), (s["cold"] - vr - writes) | (writes if not reads else set())
         valub = op is not None and op.name.startswith("VALUB_")
         base = cycle + lat
