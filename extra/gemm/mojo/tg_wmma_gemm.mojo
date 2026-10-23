@@ -16,10 +16,10 @@ comptime B_COLS = K if TB == 1 else N
 comptime b_layout = row_major[B_ROWS, B_COLS]()
 comptime c_layout = row_major[M, N]()
 comptime B128 = ceildiv(N, 128) * ceildiv(M, 128)
-comptime WM = 4 if B128 >= 96 else 2
-comptime WN = 2 if B128 >= 96 else (4 if B128 >= 64 else 2)
-comptime TM = 2
-comptime TN = 4 if B128 >= 96 else 2
+comptime WM = get_defined_int["TG_WM", 4 if B128 >= 96 else 2]()
+comptime WN = get_defined_int["TG_WN", 2 if B128 >= 96 else (4 if B128 >= 64 else 2)]()
+comptime TM = get_defined_int["TG_TM", 2]()
+comptime TN = get_defined_int["TG_TN", 4 if B128 >= 96 else 2]()
 
 def tg_wmma_gemm(a: UnsafePointer[Float16, MutAnyOrigin], b: UnsafePointer[Float16, MutAnyOrigin], c: UnsafePointer[Scalar[C_DTYPE], MutAnyOrigin]):
     amar_matmul_wmma_pipe[type_of(a_layout), type_of(b_layout), type_of(c_layout), WM, WN, TM, TN](
