@@ -57,6 +57,7 @@ quickstart.py
 weights
 *.lprof
 comgr_*
+!mojo/autogen/comgr_*.mojo
 *.pkl
 !extra/sqtt/examples/**/*.pkl
 site/
