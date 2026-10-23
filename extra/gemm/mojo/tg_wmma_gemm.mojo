@@ -1,18 +1,29 @@
 # tinygrad-callable entry: three plain pointers (tinygrad's buffer ABI, no hidden kernargs) around the pipelined fp16 WMMA GEMM
-# C[N,N] (fp32) = A[N,N] @ B[N,N] (fp16, row-major); N is fixed at build time (-D TG_N=4096), a multiple of 128
+# C[M,N] = A[M,K] @ B, B row-major [K,N] or, with -D WMMA_TB=1, stored [N,K] (x @ W.T). Sizes fixed at build time
+# (-D TG_M/TG_N/TG_K, default 4096), multiples of 128. The tile rule below must match tiles() in tinygrad/runtime/support/mojo_gemm.py.
 from max.gpu.host import DeviceContext
+from std.math import ceildiv
 from std.sys import get_defined_int
 from layout import TileTensor, row_major
-from matmul_wmma_pipe import amar_matmul_wmma_pipe, C_DTYPE
+from matmul_wmma_pipe import amar_matmul_wmma_pipe, C_DTYPE, TB
 
+comptime M = get_defined_int["TG_M", 4096]()
 comptime N = get_defined_int["TG_N", 4096]()
-comptime a_layout = row_major[N, N]()
-comptime b_layout = row_major[N, N]()
-comptime c_layout = row_major[N, N]()
+comptime K = get_defined_int["TG_K", 4096]()
+comptime a_layout = row_major[M, K]()
+comptime B_ROWS = N if TB == 1 else K
+comptime B_COLS = K if TB == 1 else N
+comptime b_layout = row_major[B_ROWS, B_COLS]()
+comptime c_layout = row_major[M, N]()
+comptime B128 = ceildiv(N, 128) * ceildiv(M, 128)
+comptime WM = 4 if B128 >= 96 else 2
+comptime WN = 2 if B128 >= 96 else (4 if B128 >= 64 else 2)
+comptime TM = 2
+comptime TN = 4 if B128 >= 96 else 2
 
 def tg_wmma_gemm(a: UnsafePointer[Float16, MutAnyOrigin], b: UnsafePointer[Float16, MutAnyOrigin], c: UnsafePointer[Scalar[C_DTYPE], MutAnyOrigin]):
-    amar_matmul_wmma_pipe[type_of(a_layout), type_of(b_layout), type_of(c_layout)](
-        TileTensor(a, a_layout), TileTensor(b, b_layout), TileTensor(c, c_layout), Int32(N), Int32(N), Int32(N))
+    amar_matmul_wmma_pipe[type_of(a_layout), type_of(b_layout), type_of(c_layout), WM, WN, TM, TN](
+        TileTensor(a, a_layout), TileTensor(b, b_layout), TileTensor(c, c_layout), Int32(M), Int32(N), Int32(K))
 
 def main() raises:
     var ctx = DeviceContext()

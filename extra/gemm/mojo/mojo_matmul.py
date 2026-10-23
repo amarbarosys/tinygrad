@@ -12,7 +12,7 @@ co = (pathlib.Path(__file__).parent / f"wmma_pipe_gfx1100_n{N}.co").read_bytes()
 if __name__ == "__main__":
   a, b = Tensor.randn(N, N, dtype=dtypes.half).realize(), Tensor.randn(N, N, dtype=dtypes.half).realize()
   c = Tensor.empty(N, N, dtype=dtypes.float).realize()
-  fxn = lambda a, b, c: program(co, [a, b, c], 256, (N // 128, N // 128), ops=2 * N**3, mem=2 * N * N * 2 + N * N * 4)
+  def fxn(a, b, c): return program(co, [a, b, c], 256, (N // 128, N // 128), ops=2 * N**3, mem=2 * N * N * 2 + N * N * 4)
   linear = Tensor.custom_kernel(a, b, c, fxn=fxn)[2].schedule_linear()
   ets = []
   for _ in range(CNT):

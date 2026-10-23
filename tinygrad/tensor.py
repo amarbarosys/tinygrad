@@ -162,6 +162,12 @@ class Tensor(RandMixin):
     """
     return [Tensor(u) for u in UOp.custom_kernel(*[t.uop for t in (self,)+lst], fxn=fxn, grad_fxn=grad_fxn)]
 
+  def dot(self, w:Tensor, dtype:DTypeLike|None=None) -> Tensor:
+    # fork: with MOJO_GEMM=1, fp16 matmuls of 128-multiple shapes on gfx1100 run a Mojo WMMA kernel (tinygrad/runtime/support/mojo_gemm.py)
+    from tinygrad.runtime.support import mojo_gemm
+    if dtype is None and (out:=mojo_gemm.dot(self, w)) is not None: return out
+    return super().dot(w, dtype)
+
   @rewrite_group(lambda *tensors,ret: f"Schedule {len(tensors)} -> {len(ret[0].src)}")
   def linear_with_vars(self, *lst:Tensor) -> tuple[UOp, dict[str, int]]:
     """Creates the LINEAR UOp needed to realize these Tensor(s), with Variables."""

@@ -4,4 +4,4 @@ set -euo pipefail
 cd "$(dirname "$0")"
 N=${1:-4096}; MOJO=${MOJO:-mojo}; tmp=$(mktemp -d .build.XXXX); trap 'rm -rf "$tmp"' EXIT
 "$MOJO" build --target-accelerator gfx1100 --emit asm -D WMMA_C_F16=0 -D TG_N="$N" -I . -o "$tmp/k.s" tg_wmma_gemm.mojo
-python3 mojo_kernel.py "$tmp/k.s" "wmma_pipe_gfx1100_n$N.co"
+PYTHONPATH=../../.. python3 mojo_kernel.py "$tmp/k.s" "wmma_pipe_gfx1100_n$N.co"
