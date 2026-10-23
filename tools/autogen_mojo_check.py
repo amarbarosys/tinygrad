@@ -10,8 +10,9 @@ from autogen_mojo import ident, mty
 def main():
   bdir, wdir, mods = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3:]
   wdir.mkdir(parents=True, exist_ok=True)
-  rng = random.Random(0)
   for name in mods:
+    # per-module seed: a module's sample never depends on which modules ran before it in this process
+    rng = random.Random(name)
     mod = importlib.import_module(f"tinygrad.runtime.autogen.{name}")
     sts = [(k, v) for k, v in vars(mod).items() if isinstance(v, type) and issubclass(v, c.Struct) and hasattr(v, "_real_fields_")
            and k == v.__name__ and v.__module__ == mod.__name__ and v.SIZE > 0]
