@@ -4,12 +4,11 @@
 from __future__ import annotations
 import codecs, functools, math, os, pathlib, re, shutil, subprocess, tempfile
 from typing import TYPE_CHECKING, cast
-from tinygrad.helpers import ContextVar, cache_dir, prod
+from tinygrad.helpers import MOJO_GEMM, cache_dir, prod
 from tinygrad.dtype import dtypes
 if TYPE_CHECKING: from tinygrad.tensor import Tensor
 
 SRC = pathlib.Path(__file__).parents[3] / "extra" / "gemm" / "mojo"
-MOJO_GEMM = ContextVar("MOJO_GEMM", 0)
 
 def extract_code_object(asm:str) -> bytes:
   """`mojo build --emit asm` embeds each GPU kernel as a finished AMDGPU code object in an .asciz string."""
@@ -45,7 +44,9 @@ def code_object(M:int, N:int, K:int, tb:int) -> bytes|None:
     if subprocess.run(cmd, capture_output=True, timeout=900).returncode != 0: return None
     co = extract_code_object(pathlib.Path(f"{tmp}/k.s").read_text())
   path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_bytes(co)
+  tmp_path = path.with_suffix(f".tmp.{os.getpid()}")
+  tmp_path.write_bytes(co)
+  tmp_path.replace(path)
   return co
 
 @functools.cache
@@ -67,6 +68,7 @@ def dot(x:Tensor, w:Tensor) -> Tensor|None:
   if not all(isinstance(s, int) for s in x.shape + w.shape) or getattr(dev:=Device[x.device], "arch", None) != "gfx1100": return None
   if type(getattr(dev, "iface", None)).__name__.startswith("MOCK"): return None  # the emulator cannot run Mojo code (no MUBUF)
   xs, ws = cast(tuple[int, ...], x.shape), cast(tuple[int, ...], w.shape)
+  if xs[-1] != ws[0]: return None
   M, K, N = prod(xs[:-1]), xs[-1], ws[1]
   if M % 128 or N % 128 or K % 128: return None
   tb = int(w.uop.op is Ops.PERMUTE and w.uop.marg == (1, 0))  # x @ W.T (nn.Linear): read W as stored [N, K], no copy
