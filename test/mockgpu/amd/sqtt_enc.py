@@ -188,7 +188,7 @@ def make_encoder():
                   last_mem=None, last_lds_store=False, last_lds_service=None, lds_hold=False, valu_sread={}, warm=set(),
 
                   wmma_done=[], wmma_ready={}, vsgpr_exec={}, pend=[], last_issue=0, salu_gate=False,
-                  last_cls=None, last_valub=False) for w in waves}
+                  last_cls=None, last_valub=False, cools={}) for w in waves}
     valu_free, trans_free, unit = {0: 0, 2: 0}, {0: 0, 2: 0}, dict(lds=0)
     port_free: dict[tuple[int, str], int] = {}
     # instruction cache: 64 B lines fetched in aligned blocks of ahead + 1 lines (s_set_inst_prefetch_distance, default 3);
@@ -205,7 +205,7 @@ def make_encoder():
     def lds_credits(sm: int, cycle: int) -> int:  # slots free in pairs at the second service's start (the first one alone)
       st_ = lds_starts[sm]
       return sum(1 for n in range(len(st_)) if (i := ((n + 1) | 1) - 1) < len(st_) and st_[i] <= cycle)
-    lds_q: list[tuple[int, int, bool, int, str|None, int]] = []  # (accept, wave, store, occupancy, load width, conflict cycles)
+    lds_q: list[tuple[int, int, bool, int, str|None, int, set[str]]] = []  # (accept, wave, store, occupancy, load width, conflict cycles, dest)
     ret_free: dict[int, float] = {0: 0, 2: 0}
     bar_open: dict[tuple[int, int], int] = {}  # (workgroup, simd) -> arrival cycle that opened the current barrier window
     bar_last: dict[int, int] = {}  # workgroup -> cycle of the last arrival the barrier unit counted
@@ -237,6 +237,7 @@ def make_encoder():
           if (g := st[r[1]].get("store_grant")) is not None and t - g <= STORE_LOAD_WINDOW: extra += STORE_LOAD_DELAY
           ret_free[simd[r[1]]] = done = max(t + LDS_RET + extra, ret_free[simd[r[1]]] + beat)
           st[r[1]]["lgkm"].append(math.ceil(done))
+          st[r[1]]["cools"].update({x: math.ceil(done) for x in r[6]})  # its destination goes cold when the data lands
         st[r[1]]["lds_wait"] -= 1
     for w in waves: put(w, WAVESTART, simd=simd[w], wgp=0, wave=slot[w], id7=rank[w])
 
@@ -315,6 +316,9 @@ def make_encoder():
       elif cls == "VALU":
         lat = VALU_EXEC_LAT_NOREAD if not reads else VALU_EXEC_LAT_SLOW if _SLOW_VALU.search(_name(inst)) else VALU_EXEC_LAT
         vr = {r for r in reads if r[0] == "v"}
+        landed = {x for x, t in s["cools"].items() if t <= cycle}
+        s["warm"] -= landed
+        for x in landed: del s["cools"][x]
         sw = {r for r in writes if r[0] == "s"} or re.search(r"V_CMP_|V_ADD_CO|V_SUB_CO", _name(inst))
         # fmac reads its accumulator too; VOPD operands are bank-separated by the encoding
         banks = [] if hasattr(inst, "opx") else [int(r[1:]) % 4 for r in vr | (writes if "FMAC" in _name(inst) else set())]
@@ -354,8 +358,7 @@ def make_encoder():
         occ = (_cycles(op) if op else 1) if store else 1
         width = (m.group(1) if (m := re.search(r'_B(32|64|96|128)$', _name(inst))) else "32") if not store else None
         conflict = lanes[w][ph][s["i"] - 1][1] - 1  # bank conflicts serialize the access, the data follows it
-        if not store: s["warm"] -= writes
-        lds_q.append((cycle + LDS_ACCEPT, w, store, occ + conflict, width, conflict))
+        lds_q.append((cycle + LDS_ACCEPT, w, store, occ + conflict, width, conflict, writes))
         lds_issued[simd[w]] += 1
         s["lds_wait"] += 1
         s["mem_issue"] = cycle
