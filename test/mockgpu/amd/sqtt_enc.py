@@ -17,6 +17,7 @@ COLD_READ = 1
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 STORE_LOAD_WINDOW, STORE_LOAD_DELAY = 6, 2  # an LDS load granted within the window after its wave's store returns this much later
 VMEM_AFTER_SALU = 7  # a global access issues this long after the last SALU of its wave
+SCC_HOLD = 2  # and this much later when that SALU run wrote SCC (s_add_u32 measured)
 ICACHE_WAVE_GAP = 2  # an icache line fetched on a miss reaches its waves this far apart, in rank order
 # barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
 BARRIER_WINDOW, BARRIER_BUSY = 2, 7
@@ -108,6 +109,7 @@ def make_encoder():
   # DRAM: rough, not exact targets
   SMEM_LAT, VMEM_LOAD_LAT, STORE_ACK = 880, 785, 325
   _SLOW_VALU = re.compile(r'V_(LSHLREV|LSHRREV|ASHRREV|FMA|LSHL_OR|LSHL_ADD)_')
+  _SCC_WRITER = re.compile(r'S_(ADD|SUB|ADDC|SUBB|AND|OR|XOR|NAND|NOR|XNOR|ANDN2|ORN2|LSHL|LSHR|ASHR|BFE|CMP|BITCMP|ABSDIFF|MIN|MAX|NOT|ABS)_')
   _REG = re.compile(r'([vs])\[(\d+)(?::(\d+))?\]')
 
   def _port(op: InstOp|None) -> str:  # transcendentals issue on their own port, every 4 cycles, beside plain VALU
@@ -189,7 +191,7 @@ def make_encoder():
                   last_mem=None, last_lds_store=False, last_lds_service=None, lds_hold=False, valu_sread={}, warm=set(),
 
                   wmma_done=[], wmma_ready={}, vsgpr_exec={}, pend=[], last_issue=0, salu_gate=False,
-                  last_cls=None, last_valub=False, cools={}) for w in waves}
+                  last_cls=None, last_valub=False, cools={}, scc_run=False) for w in waves}
     valu_free, trans_free, unit = {0: 0, 2: 0}, {0: 0, 2: 0}, dict(lds=0)
     port_free: dict[tuple[int, str], int] = {}
     # instruction cache: 64 B lines fetched in aligned blocks of ahead + 1 lines (s_set_inst_prefetch_distance, default 3);
@@ -266,7 +268,7 @@ def make_encoder():
         need = max([need] + [s["vsgpr_exec"][r] + VALU_TO_SCALAR for r in reads | ({"s106"} if "VCC" in _name(inst) else set())
                              if r in s["vsgpr_exec"]])
       if cls == "SMEM" and s["salu_issue"] is not None: need = max(need, s["salu_issue"] + SMEM_AFTER_SALU)
-      if cls == "VMEM" and s["salu_issue"] is not None: need = max(need, s["salu_issue"] + VMEM_AFTER_SALU)
+      if cls == "VMEM" and s["salu_issue"] is not None: need = max(need, s["salu_issue"] + VMEM_AFTER_SALU + SCC_HOLD * s["scc_run"])
       for countdown, dep in s["pend"]:  # s_delay_alu: VALU_DEP_n / TRANS32_DEP_n wait for the n-th newest VALU, SALU_CYCLE_n
         if countdown: continue
         if 1 <= dep <= 7 and len(s["valu_issues"]) >= (n := dep if dep <= 4 else dep - 4):
@@ -298,6 +300,7 @@ def make_encoder():
       s["i"] += 1
       s["ready"] = cycle + 1
       s["pend"] = [[c - 1, d] for c, d in s["pend"] if c > 0]
+      if cls == "SALU": s["scc_run"] = (s["last_cls"] == "SALU" and s["scc_run"]) or bool(_SCC_WRITER.match(_name(inst)))
       s["last_cls"], s["last_issue"] = cls, cycle
       if cls == "LDS": s["last_lds_store"], s["last_lds_service"], s["lds_hold"] = "STORE" in _name(inst), None, True
       elif cls == "VALU": s["lds_hold"] = False
