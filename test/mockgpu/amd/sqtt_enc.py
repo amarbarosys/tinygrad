@@ -15,6 +15,7 @@ VALUB_OCC, SALU_AFTER_VALUB = 4, 5
 # previous-cycle VALU read, an SGPR or a literal
 COLD_READ = 1
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
+VMEM_AFTER_SALU = 7  # a global access issues this long after the last SALU of its wave
 # barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
 BARRIER_WINDOW, BARRIER_BUSY = 2, 7
 LDS_NEWEST, LDS_TIE_ALTERNATE = 1, 1  # LDS arbitration between SIMDs: newest-accepted head wins; equal: idle -> alternate, busy -> stay
@@ -259,6 +260,7 @@ def make_encoder():
         need = max([need] + [s["vsgpr_exec"][r] + VALU_TO_SCALAR for r in reads | ({"s106"} if "VCC" in _name(inst) else set())
                              if r in s["vsgpr_exec"]])
       if cls == "SMEM" and s["salu_issue"] is not None: need = max(need, s["salu_issue"] + SMEM_AFTER_SALU)
+      if cls == "VMEM" and s["salu_issue"] is not None: need = max(need, s["salu_issue"] + VMEM_AFTER_SALU)
       for countdown, dep in s["pend"]:  # s_delay_alu: VALU_DEP_n / TRANS32_DEP_n wait for the n-th newest VALU, SALU_CYCLE_n
         if countdown: continue
         if 1 <= dep <= 7 and len(s["valu_issues"]) >= (n := dep if dep <= 4 else dep - 4):
