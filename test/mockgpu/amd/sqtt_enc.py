@@ -9,7 +9,7 @@ from tinygrad.renderer.amd.sqtt import (_build_decode_tables, PACKET_TYPES_RDNA3
 _NIB_COUNTS = {cls: nc for _, (cls, nc, *_) in _build_decode_tables(PACKET_TYPES_RDNA3)[0].items()}
 LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
 # VALUB_4 (32-bit integer multiply): starts like a plain VALU, holds the pipe VALUB_OCC, its exec token is the last of them;
-# the next SALU issues at +5
+# the next SALU issues at +5, also across waits and s_nop
 VALUB_OCC, SALU_AFTER_VALUB = 4, 5
 # a VALU execs a cycle later for each of: a cold operand (a VGPR no VALU has read since the wave started or a memory load
 # wrote it; v_mov and VALU writes keep a VGPR warm), two VGPR operands in one bank (v % 4), a VCC/SGPR destination
@@ -263,7 +263,7 @@ def make_encoder():
         need = max(need, s["salu_exec"] + BRANCH_AFTER_SALU)  # waits for its SCC/VCC producer
       if cls == "SALU":  # overwriting an SGPR that an issued VALU has not read yet waits for that VALU's exec
         need = max([need] + [s["valu_sread"][r] for r in writes if r in s["valu_sread"]])
-        if s["last_cls"] == "VALU" and s["last_valub"]: need = max(need, s["last_issue"] + SALU_AFTER_VALUB)
+        if s["last_valub"]: need = max(need, s["valu_issues"][-1] + SALU_AFTER_VALUB)  # the wave's last VALU was a VALUB
       if cls in ("SALU", "SMEM", "BR"):  # an SGPR or VCC written by a VALU stalls the scalar reader until exec + 9
         need = max([need] + [s["vsgpr_exec"][r] + VALU_TO_SCALAR for r in reads | ({"s106"} if "VCC" in _name(inst) else set())
                              if r in s["vsgpr_exec"]])
