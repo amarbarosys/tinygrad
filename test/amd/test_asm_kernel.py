@@ -15,7 +15,7 @@ import tinygrad.runtime.autogen.amd.rdna4.ins as r4
 from tinygrad.renderer.amd.dsl import s, v, NULL, Reg, Inst
 from test.amd.helpers import TARGET_TO_ARCH
 from test.mockgpu.amd.emu import ASM_CALL
-from extra.gemm.amd_asm_matmul import Kernel
+from extra.gemm.asm_kernel import Kernel
 
 # small pattern matcher converting CALL to INS
 from tinygrad.uop.ops import PatternMatcher, UPat, graph_rewrite, rewrite_group

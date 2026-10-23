@@ -886,7 +886,7 @@ from tinygrad.uop.ops import KernelInfo
 from tinygrad.renderer.amd.dsl import s
 from tinygrad.runtime.autogen.amd.rdna3.ins import (s_add_u32, s_branch, s_cbranch_execz, s_cbranch_scc0, s_cbranch_scc1, s_cmp_eq_i32,
                                                     s_cmp_eq_u64, s_code_end, s_endpgm, s_getpc_b64, s_mov_b32, s_nop)
-from extra.gemm.amd_asm_matmul import Kernel
+from extra.gemm.asm_kernel import Kernel
 
 @needs_tracked_pm
 class TestCfg(unittest.TestCase):
