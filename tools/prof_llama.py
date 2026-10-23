@@ -30,7 +30,9 @@ def main():
     times.append(time.perf_counter() - t)
   pr.disable()
   print("step s", " ".join(f"{x:.3f}" for x in times))
-  print(f"total {sum(times):.2f}s  cold(first 3) {sum(times[:3]):.2f}s  warm median {sorted(times[3:])[len(times[3:])//2]*1e3:.2f}ms")
+  warm = sorted(times[3:])
+  med = f"{warm[len(warm)//2]*1e3:.2f}ms" if warm else "n/a (<4 steps)"
+  print(f"total {sum(times):.2f}s  cold(first 3) {sum(times[:3]):.2f}s  warm median {med}")
   pr.dump_stats(".work/prof_llama.pstats")
   # builtins ("~" file) bill their time to the callers' buckets, split by per-caller time
   agg: dict[str, float] = {}
