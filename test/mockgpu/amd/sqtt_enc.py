@@ -304,7 +304,7 @@ def make_encoder():
       if cls == "IMM":
         if _name(inst) == "S_SET_INST_PREFETCH_DISTANCE": icache["ahead"] = getattr(inst, "simm16") & 3
         if "WAITCNT" in _name(inst):
-          pending = bool(s["lgkm"] or s["vm"] or s["lds_wait"])  # a wait with nothing outstanding costs nothing extra
+          pending = bool(s["lds_wait"])  # a wait costs extra only while an LDS request it counts is not served yet
           for q, n in zip((s["lgkm"], s["vm"]), _waits(inst)): del q[:max(0, len(q) - n)]
           if not s["blocked"] and pending: s["ready"] = cycle + WAITCNT_FREE_PENALTY
         s["blocked"] = False
