@@ -1,7 +1,10 @@
 from typing import Union, Optional, Any
 import collections, math
 from tinygrad import Tensor, Variable, TinyJit, dtypes, nn, Device
-from tinygrad.helpers import getenv, DEBUG
+from tinygrad.helpers import getenv, DEBUG, ContextVar
+
+# prompts at start_pos 0 run through one TinyJit per padded length (128 * 2**k), so warm prefill skips graph_rewrite
+PREFILL_JIT = ContextVar("PREFILL_JIT", 1)
 
 # https://github.com/facebookresearch/llama/blob/1076b9c51c77ad06e9d7ba8a4c6df775741732bd/llama/model.py#L47
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> Tensor:
@@ -203,8 +206,10 @@ class Transformer:
     self.max_context = max_context
     self.freqs_cis = precompute_freqs_cis(dim // n_heads, self.max_context * 2, rope_theta).contiguous().is_param_(False)
     self.forward_jit = TinyJit(self.forward) if jit else None
+    self.prefill_jits: dict[int, TinyJit] = {}
 
-  def forward(self, tokens:Tensor, start_pos:Union[Variable,int], temperature:float, top_k:int, top_p:float, alpha_f:float, alpha_p:float):
+  def forward(self, tokens:Tensor, start_pos:Union[Variable,int], temperature:float, top_k:int, top_p:float, alpha_f:float, alpha_p:float,
+              last:Union[Variable,int]=-1):
     _bsz, seqlen = tokens.shape
     h = self.tok_embeddings(tokens).contiguous()
     freqs_cis = self.freqs_cis.cast(h.dtype)[:, start_pos:start_pos+seqlen, :, :, :]
@@ -216,12 +221,22 @@ class Transformer:
     logits = self.output(self.norm(h).contiguous().contiguous_backward()).contiguous_backward()
     if math.isnan(temperature): return logits
 
-    return sample(logits[:, -1, :].flatten(), temperature, top_k, top_p, alpha_f, alpha_p)
+    # last: position of the final real token when tokens are right-padded
+    return sample(logits[:, last, :].flatten() if isinstance(last, int) else logits.shrink((None, (last, last+1), None)).flatten(),
+                  temperature, top_k, top_p, alpha_f, alpha_p)
 
   def __call__(self, tokens:Tensor, start_pos:int, temperature:float=0.0, top_k:int=0, top_p:float=0.8, alpha_f:float=0.0, alpha_p:float=0.0):
     # TODO: better way to handle the first call v.s. the rest?
     if tokens.shape[0:2] == (1,1) and self.forward_jit is not None and start_pos != 0:
       return self.forward_jit(tokens, Variable("start_pos", 1, self.max_context-1).bind(start_pos), temperature, top_k, top_p, alpha_f, alpha_p)
+    if (seqlen:=tokens.shape[1]) > 1 and start_pos == 0 and self.forward_jit is not None and PREFILL_JIT:
+      # right-pad: the causal mask keeps real tokens from seeing the pad, and decode overwrites the pad's cache slots before reading them
+      bucket = 128
+      while bucket < seqlen: bucket *= 2
+      if bucket <= self.max_context:
+        if bucket not in self.prefill_jits: self.prefill_jits[bucket] = TinyJit(self.forward)
+        return self.prefill_jits[bucket](tokens.pad(((0, 0), (0, bucket-seqlen))).contiguous().realize(), 0, temperature, top_k, top_p,
+                                         alpha_f, alpha_p, Variable("last", 0, bucket-1).bind(seqlen-1))
     return self.forward(tokens, start_pos, temperature, top_k, top_p, alpha_f, alpha_p)
 
 # *** helpers ***

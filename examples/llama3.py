@@ -266,6 +266,11 @@ def prefill(model, toks, start_pos=0):
     last_seen_toks = toks
     toks = toks[i:]
 
+  # a fresh prompt runs in one call, through the model's padded prefill jit
+  if start_pos == 0 and len(toks) > 1:
+    model(Tensor([toks], device=device), 0, TEMPERATURE, TOP_K, TOP_P, ALPHA_F, ALPHA_P).realize()
+    return len(toks)
+
   # prefill the model
   for tok in tqdm(toks):
     GlobalCounters.reset()
