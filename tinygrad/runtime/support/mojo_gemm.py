@@ -69,10 +69,10 @@ def dot(x:Tensor, w:Tensor) -> Tensor|None:
   xs, ws = cast(tuple[int, ...], x.shape), cast(tuple[int, ...], w.shape)
   M, K, N = prod(xs[:-1]), xs[-1], ws[1]
   if M % 128 or N % 128 or K % 128: return None
-  tb = int(w.uop.op is Ops.PERMUTE and w.uop.arg == (1, 0))  # x @ W.T (nn.Linear): read W as stored [N, K], no copy
+  tb = int(w.uop.op is Ops.PERMUTE and w.uop.marg == (1, 0))  # x @ W.T (nn.Linear): read W as stored [N, K], no copy
   if (co:=code_object(M, N, K, tb)) is None: return None
   bm, bn, threads = tiles(M, N)
-  a, b = x.reshape(M, K).contiguous(), (w.T if tb else w).contiguous()
+  a, b = x.reshape(M, K).contiguous(), (Tensor(w.uop.src[0]).contiguous() if tb else w.contiguous())
   c = Tensor.empty(M, N, dtype=dtypes.half, device=x.device)
   out = Tensor.custom_kernel(a, b, c, fxn=lambda a, b, c: program(co, [a, b, c], threads, (N // bn, M // bm), ops=2*M*N*K, mem=2*(M*K+K*N+M*N)),
                              grad_fxn=_grad(tb))[2]

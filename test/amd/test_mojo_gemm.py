@@ -25,15 +25,30 @@ class TestMojoGemm(unittest.TestCase):
     w = Tensor.randn(*ws, dtype=dtypes.half).realize()
     wt = w.T if transpose_w else w
     self.assertIsNotNone(mojo_gemm.dot(x, wt), "eligible shape was not routed to the Mojo kernel")
-    out = (x @ wt).numpy().astype(np.float32)
-    ref = x.numpy().astype(np.float32) @ wt.numpy().astype(np.float32)
+    out = (x @ wt).realize()
+    ref = (x.float() @ wt.float()).realize()
     self.assertEqual(out.shape, ref.shape)
-    self.assertLess(np.abs(out - ref).max() / np.abs(ref).max(), 2e-3)
+    out_np, ref_np = out.numpy().astype(np.float32), ref.numpy()
+    self.assertLess((np.square(out_np - ref_np)).mean(), 1e-2)
+    self.assertLess(np.abs(out_np - ref_np).max() / np.abs(ref_np).max(), 2e-3)
 
   def test_square(self): self._check((1024, 1024), (1024, 1024))
   def test_small_tiles(self): self._check((512, 2048), (2048, 512))
   def test_linear_batched(self): self._check((2, 256, 2048), (8192, 2048), transpose_w=True)
   def test_linear_small_tiles(self): self._check((512, 8192), (2048, 8192), transpose_w=True)
+
+  def test_shapes_sweep(self):
+    shapes = [
+      (1024, 1024, 1024), (2048, 2048, 2048), (4096, 4096, 4096), (8192, 8192, 8192),
+      (2048, 4096, 4096), (2048, 4096, 14336), (2048, 14336, 4096), (2048, 4096, 1024),
+      (1024, 2048, 4096),  # non-square M < N
+      (4096, 2048, 1024),  # non-square M > N
+    ]
+    for M, K, N in shapes:
+      for transpose_w in (False, True):
+        with self.subTest(M=M, K=K, N=N, transpose_w=transpose_w):
+          ws = (N, K) if transpose_w else (K, N)
+          self._check((M, K), ws, transpose_w=transpose_w)
 
   def test_falls_back(self):
     x, w = Tensor.randn(100, 128, dtype=dtypes.half), Tensor.randn(128, 128, dtype=dtypes.half)
