@@ -38,7 +38,7 @@ def make_encoder():
   import math, re, sys
   from tinygrad.helpers import getenv
   SQTT_TRACE = getenv("SQTT_TRACE", 0)  # print every scheduled packet, all waves, to stderr
-  LDS_FIRST = getenv("SQTT_LDS_PARITY", 0) * 2  # which SIMD wins the first idle LDS tie: hidden arbiter state, the scorer tries both
+  LDS_FIRST = getenv("SQTT_LDS_PARITY", 0) * 2  # which SIMD wins every tie of equal LDS heads: hidden arbiter state, the scorer tries both
   SIMD_PARITY = getenv("SQTT_SIMD_PARITY", 0)  # which SIMD of the pair gets wave 0: the dispatcher's round robin carries over
 
   def _kinds(*names: str) -> tuple[type[Inst], ...]:
@@ -217,10 +217,9 @@ def make_encoder():
         heads = {sm: next(r for r in cand if simd[r[1]] == sm) for sm in {simd[r[1]] for r in cand}}
         last = unit.get("lds_simd")
         if len(heads) == 1: pick = next(iter(heads))
-        elif heads[0][0] == heads[2][0] and heads[0][2] != heads[2][2]: pick = 0 if heads[0][2] else 2  # equal heads: store first
+        elif heads[0][0] == heads[2][0]: pick = (0 if heads[0][2] else 2) if heads[0][2] != heads[2][2] else LDS_FIRST  # store first
         elif last in heads and t == unit["lds"]: pick = last
-        elif heads[0][0] != heads[2][0]: pick = max(heads, key=lambda sm: heads[sm][0])
-        else: pick = LDS_FIRST if last is None else 2 - last  # equal heads on an idle server: alternate
+        else: pick = max(heads, key=lambda sm: heads[sm][0])
         r = heads[pick]
         unit["lds_simd"] = simd[r[1]]
         lds_q.remove(r)
