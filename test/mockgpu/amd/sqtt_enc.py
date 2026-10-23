@@ -15,6 +15,7 @@ VALUB_OCC, SALU_AFTER_VALUB = 4, 5
 # wrote it; v_mov and VALU writes keep a VGPR warm), two VGPR operands in one bank (v % 4), a VCC/SGPR destination
 COLD_READ = 1
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
+STORE_LOAD_WINDOW, STORE_LOAD_DELAY = 6, 2  # an LDS load granted within the window after its wave's store returns this much later
 VMEM_AFTER_SALU = 7  # a global access issues this long after the last SALU of its wave
 # barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
 BARRIER_WINDOW, BARRIER_BUSY = 2, 7
@@ -229,9 +230,12 @@ def make_encoder():
         st[r[1]]["last_lds_service"] = t
         unit["lds"] = t + r[3]
         t += r[5]
-        if r[2]: st[r[1]]["lgkm"].append(t + LDS_RET + 2)
+        if r[2]:
+          st[r[1]]["lgkm"].append(t + LDS_RET + 2)
+          st[r[1]]["store_grant"] = t
         else:  # loads return their data one after another per SIMD
           extra, beat = LDS_RET_WIDE[r[4] or "32"]
+          if (g := st[r[1]].get("store_grant")) is not None and t - g <= STORE_LOAD_WINDOW: extra += STORE_LOAD_DELAY
           ret_free[simd[r[1]]] = done = max(t + LDS_RET + extra, ret_free[simd[r[1]]] + beat)
           st[r[1]]["lgkm"].append(math.ceil(done))
         st[r[1]]["lds_wait"] -= 1
