@@ -11,8 +11,8 @@ LDS_TO_VALU_LOAD, LDS_TO_VALU_STORE = 4, 5
 # VALUB_4 (32-bit integer multiply): starts like a plain VALU, holds the pipe VALUB_OCC, its exec token is the last of them;
 # the next SALU issues at +5
 VALUB_OCC, SALU_AFTER_VALUB = 4, 5
-# a VALU execs a cycle later when an operand is cold: a VGPR first read after a v_mov or a memory load wrote it, an SGPR
-# or a literal; or when two of its VGPR operands sit in one bank (v % 4)
+# a VALU execs a cycle later when an operand is cold: a VGPR no VALU has read since the wave started or a memory load wrote
+# it (v_mov and VALU writes keep a VGPR warm), an SGPR or a literal; or when two of its VGPR operands sit in one bank (v % 4)
 COLD_READ = 1
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 VMEM_AFTER_SALU = 7  # a global access issues this long after the last SALU of its wave
@@ -184,7 +184,7 @@ def make_encoder():
     st: dict[int, dict[str, Any]] = {w: dict(i=0, ready=rank[w] + FETCH_LAT, blocked=False, valu_exec=None, salu_issue=None, salu_exec=None,
                   mem_issue=None, reg_ready={},
                   lgkm=[], vm=[], vs=[], arrival=None, lds_wait=0, valu_execs=[], valu_issues=[],
-                  last_mem=None, last_lds_store=False, last_lds_service=None, lds_hold=False, valu_sread={}, cold=set(),
+                  last_mem=None, last_lds_store=False, last_lds_service=None, lds_hold=False, valu_sread={}, warm=set(),
 
                   wmma_done=[], wmma_ready={}, vsgpr_exec={}, pend=[], last_issue=0, salu_gate=False,
                   last_cls=None, last_valub=False) for w in waves}
@@ -313,8 +313,8 @@ def make_encoder():
         vr = {r for r in reads if r[0] == "v"}
         sr = _regs(inst, ("src0", "src1")) - vr or "LIT" in repr(inst)  # an SGPR or literal operand
         banks = [int(r[1:]) % 4 for r in vr | (writes if "FMAC" in _name(inst) else set())]  # fmac reads its accumulator too
-        if lat == VALU_EXEC_LAT and (sr or len(set(banks)) < len(banks) or vr & s["cold"]): lat += COLD_READ
-        s["cold"] = (s["cold"] - vr - writes) | (writes if not reads else set())
+        if lat == VALU_EXEC_LAT and (sr or len(set(banks)) < len(banks) or vr - s["warm"]): lat += COLD_READ
+        s["warm"] |= vr
         valub = op is not None and op.name.startswith("VALUB_")
         base = cycle + lat
         wmma = _name(inst).startswith("V_WMMA")
@@ -349,7 +349,7 @@ def make_encoder():
         occ = (_cycles(op) if op else 1) if store else 1
         width = (m.group(1) if (m := re.search(r'_B(32|64|96|128)$', _name(inst))) else "32") if not store else None
         conflict = lanes[w][ph][s["i"] - 1][1] - 1  # bank conflicts serialize the access, the data follows it
-        if not store: s["cold"] |= writes
+        if not store: s["warm"] -= writes
         lds_q.append((cycle + LDS_ACCEPT, w, store, occ + conflict, width, conflict))
         lds_issued[simd[w]] += 1
         s["lds_wait"] += 1
@@ -359,7 +359,7 @@ def make_encoder():
       elif cls == "VMEM":
         store = "STORE" in _name(inst)
         (s["vs"] if store else s["vm"]).append(cycle + (STORE_ACK if store else VMEM_LOAD_LAT))
-        if not store: s["cold"] |= writes
+        if not store: s["warm"] -= writes
         s["mem_issue"] = cycle
         s["last_mem"] = cls
         put(cycle, INST, wave=sl, op=op if primary else InstOp(0x5a + (_cycles(op) if op else 1) - 1))
