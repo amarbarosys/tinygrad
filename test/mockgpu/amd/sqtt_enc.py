@@ -17,6 +17,7 @@ COLD_READ = 1
 MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of its wave
 STORE_LOAD_WINDOW, STORE_LOAD_DELAY = 6, 2  # an LDS load granted within the window after its wave's store returns this much later
 VMEM_AFTER_SALU = 7  # a global access issues this long after the last SALU of its wave
+ICACHE_WAVE_GAP = 2  # an icache line fetched on a miss reaches its waves this far apart, in rank order
 # barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
 BARRIER_WINDOW, BARRIER_BUSY = 2, 7
 SHARED_ISSUE = ("IMM",)  # classes two waves of a SIMD issue in one cycle (waits of several waves make one IMMEDIATE_MASK)
@@ -193,7 +194,7 @@ def make_encoder():
     port_free: dict[tuple[int, str], int] = {}
     # instruction cache: 64 B lines fetched in aligned blocks of ahead + 1 lines (s_set_inst_prefetch_distance, default 3);
     # a miss fetches the line's block, entering the second half of a block prefetches the next one
-    icache: dict[str, Any] = dict(ahead=3, ready={line: FETCH_LAT for line in range(4)})
+    icache: dict[str, Any] = dict(ahead=3, ready={line: FETCH_LAT for line in range(4)}, boot=range(4))
     def line_ready(line: int, cycle: int) -> int:
       n = icache["ahead"] + 1
       def fetch(block: int):
@@ -247,7 +248,8 @@ def make_encoder():
       reads = _regs(inst, ("src0", "src1", "src2", "vsrc1", "addr", "data0", "data1", "data", "saddr", "ssrc0", "ssrc1",
                          "srcx0", "vsrcx1", "srcy0", "vsrcy1"))
       writes = _regs(inst, ("vdst", "sdst", "vdstx", "vdsty"))
-      need = max(cycle, line_ready((pcs[w][ph][s["i"]] + inst.size() - 1) // 64, cycle))  # the whole instruction must be fetched
+      line = (pcs[w][ph][s["i"]] + inst.size() - 1) // 64  # the whole instruction must be fetched
+      need = max(cycle, line_ready(line, cycle) + (ICACHE_WAVE_GAP * rank[w] if line not in icache["boot"] else 0))
       if cls == "VALU" and len(busy_wmma := [d for d in s["wmma_done"] if d - 1 > cycle]) >= WMMA_INFLIGHT:
         need = max(need, min(busy_wmma) - 1)
       if cls == "VALU" and len(s["valu_execs"]) >= VALU_QUEUE:  # the per-wave VALU queue holds 13; a slot frees at exec + 4
