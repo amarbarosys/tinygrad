@@ -1,8 +1,8 @@
 # fp16 GEMM through a Mojo WMMA kernel (extra/gemm/mojo, mojo-baro matmul_wmma_pipe) on gfx1100: Tensor.dot routes eligible
 # matmuls here when MOJO_GEMM=1 (opt-in: eager it costs more host graph_rewrite than it saves; it pays under TinyJit). One code
-# object per (M, N, K, B layout), built with `mojo` on first use and cached.
+# object per (M, N, K, B layout, kernel source hash), built with `mojo` on first use and cached.
 from __future__ import annotations
-import codecs, functools, math, os, pathlib, re, shutil, subprocess, tempfile
+import codecs, functools, hashlib, math, os, pathlib, re, shutil, subprocess, tempfile
 from typing import TYPE_CHECKING, cast
 from tinygrad.helpers import MOJO_GEMM, cache_dir, prod
 from tinygrad.dtype import dtypes
@@ -35,7 +35,8 @@ def tiles(M:int, N:int) -> tuple[int, int, int]:
 
 @functools.cache
 def code_object(M:int, N:int, K:int, tb:int) -> bytes|None:
-  path = pathlib.Path(cache_dir) / "mojo_gemm" / f"wmma_f16_m{M}_n{N}_k{K}_tb{tb}.co"
+  src = hashlib.sha256(b"".join(f.read_bytes() for f in sorted(SRC.glob("*.mojo")))).hexdigest()[:12]
+  path = pathlib.Path(cache_dir) / "mojo_gemm" / f"wmma_f16_m{M}_n{N}_k{K}_tb{tb}_{src}.co"
   if path.exists(): return path.read_bytes()
   if (mojo:=os.environ.get("MOJO") or shutil.which("mojo")) is None or not (SRC / "tg_wmma_gemm.mojo").exists(): return None
   with tempfile.TemporaryDirectory() as tmp:
