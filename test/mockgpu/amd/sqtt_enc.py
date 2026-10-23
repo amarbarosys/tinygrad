@@ -18,7 +18,6 @@ MEM_AFTER_EXEC = 9  # an LDS access issues this long after the last VALU exec of
 VMEM_AFTER_SALU = 7  # a global access issues this long after the last SALU of its wave
 # barrier arrivals: a 2-cycle window per SIMD; an arrival after the window waits until 7 after the one that opened it
 BARRIER_WINDOW, BARRIER_BUSY = 2, 7
-LDS_NEWEST, LDS_TIE_ALTERNATE = 1, 1  # LDS arbitration between SIMDs: newest-accepted head wins; equal: idle -> alternate, busy -> stay
 SHARED_ISSUE = ("IMM",)  # classes two waves of a SIMD issue in one cycle (waits of several waves make one IMMEDIATE_MASK)
 BARRIER_SERIAL = 1  # the barrier unit counts one arrival per cycle per workgroup; the release follows the last one counted
 BARRIER_RELEASE, BARRIER_WINDOW_PER_SIMD = 12, 1  # release after the last counted arrival; the window is per SIMD (else per WGP)
@@ -213,13 +212,13 @@ def make_encoder():
     def serve_lds(upto: int):
       """Start every queued LDS request whose service slot is decidable by cycle upto (accept = issue + LDS_ACCEPT)."""
       while lds_q and (t := max(unit["lds"], min(r[0] for r in lds_q))) < upto + LDS_ACCEPT:
-        cand = [r for r in lds_q if r[0] <= t]  # FIFO within a SIMD; between SIMDs the most recently accepted head wins
+        cand = [r for r in lds_q if r[0] <= t]  # FIFO within a SIMD; a busy server stays on its SIMD, else the newest head wins
         heads = {sm: next(r for r in cand if simd[r[1]] == sm) for sm in {simd[r[1]] for r in cand}}
         last = unit.get("lds_simd")
         if len(heads) == 1: pick = next(iter(heads))
-        elif heads[0][0] != heads[2][0]: pick = max(heads, key=lambda sm: heads[sm][0]) if LDS_NEWEST else min(heads, key=lambda sm: heads[sm][0])
-        elif last is None: pick = LDS_FIRST
-        else: pick = 2 - last if LDS_TIE_ALTERNATE and t > unit["lds"] else last
+        elif last in heads and t == unit["lds"]: pick = last
+        elif heads[0][0] != heads[2][0]: pick = max(heads, key=lambda sm: heads[sm][0])
+        else: pick = LDS_FIRST if last is None else 2 - last  # equal heads on an idle server: alternate
         r = heads[pick]
         unit["lds_simd"] = simd[r[1]]
         lds_q.remove(r)
